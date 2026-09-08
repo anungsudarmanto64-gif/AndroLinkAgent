@@ -10,6 +10,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     defaults:
       run:
         working-directory: agent-template
@@ -19,17 +20,18 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
           cache: gradle
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Install Android SDK packages
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -43,10 +45,13 @@ jobs:
           python3 - <<'PY'
           import os
           from pathlib import Path
-          p = Path('app/src/main/assets/androlink-agent.json')
+
+          p = Path("app/src/main/assets/androlink-agent.json")
           p.parent.mkdir(parents=True, exist_ok=True)
-          p.write_text(os.environ['CONFIG_JSON'], encoding='utf-8')
-          print(f'Config injected: {p}')
+          p.write_text(os.environ["CONFIG_JSON"], encoding="utf-8")
+
+          print("Config injected:", p)
+          print("Config size:", p.stat().st_size, "bytes")
           PY
 
       - name: Validate enrollment configuration
@@ -54,49 +59,93 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
-          p = Path('app/src/main/assets/androlink-agent.json')
-          data = json.loads(p.read_text(encoding='utf-8'))
-          required = ['device_id', 'device_token', 'mode', 'api_base']
+
+          p = Path("app/src/main/assets/androlink-agent.json")
+          data = json.loads(p.read_text(encoding="utf-8"))
+
+          required = [
+              "device_id",
+              "device_token",
+              "mode",
+              "api_base"
+          ]
+
           missing = [k for k in required if not data.get(k)]
+
           if missing:
-              raise SystemExit('Konfigurasi enrollment tidak lengkap: ' + ', '.join(missing))
-          if data['mode'] not in ('temporary', 'permanent'):
-              raise SystemExit('Mode enrollment tidak valid')
-          print('Enrollment configuration valid.')
+              raise SystemExit(
+                  "Konfigurasi enrollment tidak lengkap: "
+                  + ", ".join(missing)
+              )
+
+          if data["mode"] not in ("temporary", "permanent"):
+              raise SystemExit("Mode enrollment tidak valid")
+
+          print("Enrollment configuration valid.")
+          print("Device:", data["device_id"])
+          print("Mode:", data["mode"])
           PY
 
       - name: Build APK
         id: build
         run: |
-          set +e
-          gradle --no-daemon --stacktrace assembleDebug
-          code=$?
-          if [ "$code" -ne 0 ]; then
-            curl --fail-with-body -sS -X POST \
-              -F "job_id=${{ github.event.client_payload.job_id }}" \
-              -F "token=${{ github.event.client_payload.callback_token }}" \
-              -F "status=failed" \
-              -F "message=Gradle build gagal. Lihat log GitHub Actions." \
-              "${{ github.event.client_payload.callback_url }}" || true
-            exit "$code"
-          fi
+          set -o pipefail
+
+          echo "========================================"
+          echo " ANDROLINK AGENT BUILD"
+          echo "========================================"
+
+          echo "Gradle version:"
+          gradle --version
+
+          echo ""
+          echo "Building optimized debug APK..."
+
+          gradle \
+            --no-daemon \
+            --stacktrace \
+            --console=plain \
+            assembleDebug
 
       - name: Locate APK
         id: apk
         run: |
-          APK=$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -1)
-          test -n "$APK"
-          echo "path=$APK" >> "$GITHUB_OUTPUT"
-          echo "APK=$APK"
+          set -e
 
-      - name: Upload APK to AndroLink server
-        run: |
-          curl --fail-with-body -sS -X POST \
-            -F "job_id=${{ github.event.client_payload.job_id }}" \
-            -F "token=${{ github.event.client_payload.callback_token }}" \
-            -F "status=success" \
-            -F "apk=@${{ steps.apk.outputs.path }};type=application/vnd.android.package-archive" \
-            "${{ github.event.client_payload.callback_url }}"
+          APK=$(find app/build/outputs/apk/debug \
+            -maxdepth 1 \
+            -type f \
+            -name '*.apk' \
+            | head -1)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK tidak ditemukan."
+            exit 1
+          fi
+
+          echo "========================================"
+          echo " APK FOUND"
+          echo "========================================"
+
+          ls -lh "$APK"
+
+          SIZE=$(stat -c%s "$APK")
+          SIZE_KB=$((SIZE / 1024))
+          SIZE_MB=$(awk "BEGIN {printf \"%.2f\", $SIZE/1024/1024}")
+
+          echo "APK: $APK"
+          echo "SIZE_BYTES=$SIZE"
+          echo "SIZE_KB=$SIZE_KB"
+          echo "SIZE_MB=$SIZE_MB MB"
+
+          if [ "$SIZE" -lt 1048576 ]; then
+            echo "RESULT: APK < 1 MB"
+          else
+            echo "RESULT: APK >= 1 MB"
+          fi
+
+          echo "path=$APK" >> "$GITHUB_OUTPUT"
+          echo "size=$SIZE" >> "$GITHUB_OUTPUT"
 
       - name: Store APK as GitHub artifact
         uses: actions/upload-artifact@v4
@@ -104,3 +153,57 @@ jobs:
           name: AndroLink-Agent-${{ github.event.client_payload.job_id }}
           path: agent-template/${{ steps.apk.outputs.path }}
           if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload APK to AndroLink server
+        id: callback
+        continue-on-error: true
+        env:
+          CALLBACK_URL: ${{ github.event.client_payload.callback_url }}
+          CALLBACK_TOKEN: ${{ github.event.client_payload.callback_token }}
+          JOB_ID: ${{ github.event.client_payload.job_id }}
+          APK_PATH: ${{ steps.apk.outputs.path }}
+        run: |
+          set +e
+
+          echo "========================================"
+          echo " UPLOADING APK TO ANDROLINK"
+          echo "========================================"
+
+          ls -lh "$APK_PATH"
+
+          echo "Upload started..."
+
+          curl \
+            --http1.1 \
+            --connect-timeout 20 \
+            --max-time 180 \
+            --retry 3 \
+            --retry-delay 5 \
+            --retry-all-errors \
+            --show-error \
+            --silent \
+            --write-out "\nHTTP_STATUS:%{http_code}\n" \
+            -X POST \
+            -F "job_id=${JOB_ID}" \
+            -F "token=${CALLBACK_TOKEN}" \
+            -F "status=success" \
+            -F "apk=@${APK_PATH};type=application/vnd.android.package-archive" \
+            "${CALLBACK_URL}"
+
+          CODE=$?
+
+          echo ""
+          echo "curl exit code: $CODE"
+
+          if [ "$CODE" -ne 0 ]; then
+            echo ""
+            echo "WARNING:"
+            echo "APK berhasil dibuat, tetapi upload ke server gagal."
+            echo "APK tetap tersedia sebagai GitHub Artifact."
+          else
+            echo ""
+            echo "APK berhasil dikirim ke AndroLink server."
+          fi
+
+          exit 0

@@ -1,0 +1,10 @@
+{
+  "app": "AndroLink",
+  "version": 1,
+  "api_base": "https://androlink.xo.je/api/",
+  "pair_endpoint": "pair_device.php",
+  "heartbeat_endpoint": "heartbeat.php",
+  "device_id": "",
+  "device_token": "",
+  "mode": "temporary"
+}

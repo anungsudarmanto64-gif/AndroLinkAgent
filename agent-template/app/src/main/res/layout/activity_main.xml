@@ -1,0 +1,14 @@
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent">
+ <LinearLayout android:orientation="vertical" android:padding="24dp" android:layout_width="match_parent" android:layout_height="wrap_content">
+  <TextView android:text="AndroLink" android:textSize="30sp" android:textStyle="bold" android:textColor="#0D6EFD" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+  <TextView android:text="Agent Perangkat Android" android:textSize="16sp" android:layout_marginTop="4dp" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+  <TextView android:id="@+id/tvDevice" android:text="Perangkat: -" android:layout_marginTop="28dp" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+  <TextView android:id="@+id/tvAndroid" android:text="Android: -" android:layout_marginTop="6dp" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+  <com.google.android.material.textfield.TextInputLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="28dp" android:hint="Kode Pairing">
+   <com.google.android.material.textfield.TextInputEditText android:id="@+id/edtCode" android:inputType="textCapCharacters" android:maxLength="32" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+  </com.google.android.material.textfield.TextInputLayout>
+  <Button android:id="@+id/btnConnect" android:text="Hubungkan Perangkat" android:layout_marginTop="18dp" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+  <TextView android:id="@+id/tvStatus" android:text="Status: Belum terhubung" android:textSize="16sp" android:layout_marginTop="24dp" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+  <Button android:id="@+id/btnDisconnect" android:text="Putuskan Koneksi" android:layout_marginTop="12dp" android:visibility="gone" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+ </LinearLayout>
+</ScrollView>

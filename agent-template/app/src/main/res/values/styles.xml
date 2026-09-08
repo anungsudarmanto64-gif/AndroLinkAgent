@@ -1,0 +1,1 @@
+<resources><style name="Theme.AndroLink" parent="Theme.Material3.DayNight.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:statusBarColor">#0D6EFD</item></style></resources>

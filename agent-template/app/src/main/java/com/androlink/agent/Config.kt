@@ -5,13 +5,16 @@ import org.json.JSONObject
 
 object Config {
 
-    var BASE_URL: String = "https://androlink.xo.je/api/"
+    var BASE_URL: String =
+        "https://androlink.xo.je/api/"
         private set
 
-    var PAIR_ENDPOINT: String = BASE_URL + "pair_device.php"
+    var PAIR_ENDPOINT: String =
+        BASE_URL + "pair_device.php"
         private set
 
-    var HEARTBEAT_ENDPOINT: String = BASE_URL + "heartbeat.php"
+    var HEARTBEAT_ENDPOINT: String =
+        BASE_URL + "heartbeat.php"
         private set
 
     var DEVICE_ID: String = ""
@@ -42,30 +45,38 @@ object Config {
 
             try {
 
-                val json = context.assets
+                val text = context.assets
                     .open("androlink-agent.json")
                     .bufferedReader()
-                    .use {
-                        JSONObject(it.readText())
-                    }
+                    .use { it.readText() }
 
-                BASE_URL = json
-                    .optString("api_base", BASE_URL)
-                    .trimEnd('/') + "/"
+                val json = JSONObject(text)
+
+                BASE_URL =
+                    json.optString(
+                        "api_base",
+                        BASE_URL
+                    )
+                        .trim()
+                        .trimEnd('/') + "/"
 
                 PAIR_ENDPOINT =
                     BASE_URL +
                     json.optString(
                         "pair_endpoint",
                         "pair_device.php"
-                    ).trimStart('/')
+                    )
+                        .trim()
+                        .trimStart('/')
 
                 HEARTBEAT_ENDPOINT =
                     BASE_URL +
                     json.optString(
                         "heartbeat_endpoint",
                         "heartbeat.php"
-                    ).trimStart('/')
+                    )
+                        .trim()
+                        .trimStart('/')
 
                 DEVICE_ID =
                     json.optString(
@@ -83,7 +94,9 @@ object Config {
                     json.optString(
                         "enrollment_code",
                         ""
-                    ).trim()
+                    )
+                        .trim()
+                        .uppercase()
 
                 MODE =
                     json.optString(
@@ -97,14 +110,22 @@ object Config {
                         ""
                     ).trim()
 
-            } catch (_: Exception) {
+            } catch (e: Exception) {
 
-                // Gunakan konfigurasi default jika
-                // APK belum menerima konfigurasi generator.
+                DEVICE_ID = ""
+                DEVICE_TOKEN = ""
+                ENROLLMENT_CODE = ""
 
             }
 
             loaded = true
         }
+    }
+
+    fun isEnrolled(): Boolean {
+
+        return DEVICE_ID.isNotBlank() &&
+                DEVICE_TOKEN.isNotBlank() &&
+                ENROLLMENT_CODE.isNotBlank()
     }
 }

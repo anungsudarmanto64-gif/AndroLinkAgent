@@ -22,8 +22,7 @@ object Api {
         params: Map<String, String>
     ): String {
 
-        val url =
-            URL(endpoint)
+        val url = URL(endpoint)
 
         val body =
             params.entries.joinToString("&") {
@@ -44,24 +43,15 @@ object Api {
                 url.openConnection()
                     as HttpURLConnection
 
-            /*
-             * POST
-             */
             connection.requestMethod =
                 "POST"
 
-            /*
-             * Timeout
-             */
             connection.connectTimeout =
                 15000
 
             connection.readTimeout =
                 20000
 
-            /*
-             * I/O
-             */
             connection.doInput =
                 true
 
@@ -71,15 +61,9 @@ object Api {
             connection.useCaches =
                 false
 
-            /*
-             * Ikuti redirect.
-             */
             connection.instanceFollowRedirects =
                 true
 
-            /*
-             * Request headers.
-             */
             connection.setRequestProperty(
                 "Content-Type",
                 "application/x-www-form-urlencoded; charset=UTF-8"
@@ -87,12 +71,7 @@ object Api {
 
             connection.setRequestProperty(
                 "Accept",
-                "application/json, text/plain, */*"
-            )
-
-            connection.setRequestProperty(
-                "Accept-Language",
-                "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
+                "application/json"
             )
 
             connection.setRequestProperty(
@@ -107,26 +86,13 @@ object Api {
 
             connection.setRequestProperty(
                 "User-Agent",
-                "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 Chrome/120.0 Mobile Safari/537.36"
+                "AndroLinkAgent/1.0 Android"
             )
-
-            /*
-             * Jangan menggunakan:
-             *
-             * Connection: close
-             *
-             * karena beberapa server hosting
-             */security layer dapat memperlakukan
-             * request secara berbeda.
-             */
 
             connection.setFixedLengthStreamingMode(
                 bodyBytes.size
             )
 
-            /*
-             * Kirim POST body.
-             */
             connection.outputStream.use { output ->
 
                 output.write(
@@ -136,52 +102,24 @@ object Api {
                 output.flush()
             }
 
-            /*
-             * Ambil HTTP code.
-             */
             val responseCode =
                 connection.responseCode
 
-            /*
-             * Ambil URL akhir setelah redirect.
-             */
-            val finalUrl =
-                connection.url
-                    ?.toString()
-                    ?: endpoint
-
-            /*
-             * Ambil content type.
-             */
-            val contentType =
-                connection.contentType
-                    ?: ""
-
-            /*
-             * Ambil response stream.
-             */
             val inputStream =
-                if (responseCode >= 400) {
-                    connection.errorStream
-                } else {
+                if (responseCode in 200..399) {
                     connection.inputStream
+                } else {
+                    connection.errorStream
                 }
 
             if (inputStream == null) {
 
                 return errorJson(
-                    message =
-                        "Server tidak mengirim response.",
-                    httpCode =
-                        responseCode,
-                    extra =
-                        "URL=$finalUrl"
+                    "Server tidak mengirim response.",
+                    responseCode
                 )
             }
 
-            /*
-             * Baca seluruh response.
-             */
             val response =
                 StringBuilder()
 
@@ -195,11 +133,9 @@ object Api {
                 var line: String?
 
                 while (
-                    reader
-                        .readLine()
-                        .also {
-                            line = it
-                        } != null
+                    reader.readLine().also {
+                        line = it
+                    } != null
                 ) {
 
                     response.append(
@@ -217,41 +153,18 @@ object Api {
                     .toString()
                     .trim()
 
-            /*
-             * Response kosong.
-             */
             if (result.isEmpty()) {
 
                 return errorJson(
-                    message =
-                        "Response server kosong.",
-                    httpCode =
-                        responseCode,
-                    extra =
-                        "Content-Type=$contentType"
+                    "Response server kosong.",
+                    responseCode
                 )
             }
 
             /*
-             * ----------------------------------------------------------
-             * CEK JSON
-             * ----------------------------------------------------------
-             *
-             * Jangan hanya melihat <html>.
-             * Kita coba parsing JSON terlebih dahulu.
-             */
-            if (looksLikeJson(result)) {
-
-                return result
-            }
-
-            /*
-             * ----------------------------------------------------------
-             * RESPONSE HTML
-             * ----------------------------------------------------------
-             *
-             * Di sinilah kita sekarang TIDAK membuang response asli.
-             * Kita ambil informasi penting dari HTML.
+             * Server seharusnya mengembalikan JSON.
+             * Kalau ternyata HTML, tampilkan informasi
+             * secukupnya supaya sumber masalah terlihat.
              */
             if (
                 result.contains(
@@ -273,55 +186,24 @@ object Api {
             ) {
 
                 val title =
-                    extractHtmlTitle(
-                        result
-                    )
-
-                val snippet =
-                    cleanHtmlSnippet(
-                        result
-                    )
+                    extractTitle(result)
 
                 return errorJson(
-                    message =
-                        "Server mengembalikan HTML/challenge.",
-                    httpCode =
-                        responseCode,
-                    extra =
-                        "URL=$finalUrl | " +
-                        "Content-Type=$contentType | " +
-                        "Title=$title | " +
-                        "Response=$snippet"
+                    "Server mengembalikan HTML/challenge. " +
+                    "HTTP $responseCode. " +
+                    "Title: $title"
                 )
             }
 
-            /*
-             * Response bukan JSON dan bukan HTML.
-             */
-            return errorJson(
-                message =
-                    "Format response server tidak dikenal.",
-                httpCode =
-                    responseCode,
-                extra =
-                    "URL=$finalUrl | " +
-                    "Content-Type=$contentType | " +
-                    "Response=${limitText(result, 300)}"
-            )
+            return result
 
         } catch (e: Exception) {
 
-            val message =
-                e.message
-                    ?: e.javaClass.simpleName
-
             return errorJson(
-                message =
-                    "Gagal menghubungi server.",
-                httpCode =
-                    0,
-                extra =
-                    message
+                "Gagal menghubungi server: ${
+                    e.message
+                        ?: e.javaClass.simpleName
+                }"
             )
 
         } finally {
@@ -329,12 +211,6 @@ object Api {
             connection?.disconnect()
         }
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | PAIR DEVICE
-    |--------------------------------------------------------------------------
-    */
 
     fun pair(
         deviceId: String,
@@ -354,12 +230,6 @@ object Api {
         )
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | HEARTBEAT
-    |--------------------------------------------------------------------------
-    */
-
     fun heartbeat(
         deviceId: String,
         deviceToken: String,
@@ -376,35 +246,7 @@ object Api {
         )
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | JSON DETECTION
-    |--------------------------------------------------------------------------
-    */
-
-    private fun looksLikeJson(
-        value: String
-    ): Boolean {
-
-        val text =
-            value.trim()
-
-        return (
-            text.startsWith("{") &&
-            text.endsWith("}")
-        ) || (
-            text.startsWith("[") &&
-            text.endsWith("]")
-        )
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | HTML TITLE
-    |--------------------------------------------------------------------------
-    */
-
-    private fun extractHtmlTitle(
+    private fun extractTitle(
         html: String
     ): String {
 
@@ -422,159 +264,36 @@ object Api {
 
         if (match != null) {
 
-            return cleanHtmlSnippet(
-                match.groupValues[1]
-            )
+            return match
+                .groupValues[1]
+                .replace(
+                    Regex("<[^>]+>"),
+                    ""
+                )
+                .replace(
+                    Regex("\\s+"),
+                    " "
+                )
+                .trim()
+                .take(150)
         }
 
         return "Tidak diketahui"
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | BERSIHKAN HTML
-    |--------------------------------------------------------------------------
-    */
-
-    private fun cleanHtmlSnippet(
-        html: String
-    ): String {
-
-        var text =
-            html
-
-        /*
-         * Buang script.
-         */
-        text =
-            text.replace(
-                Regex(
-                    "<script[^>]*>.*?</script>",
-                    setOf(
-                        RegexOption.IGNORE_CASE,
-                        RegexOption.DOT_MATCHES_ALL
-                    )
-                ),
-                " "
-            )
-
-        /*
-         * Buang style.
-         */
-        text =
-            text.replace(
-                Regex(
-                    "<style[^>]*>.*?</style>",
-                    setOf(
-                        RegexOption.IGNORE_CASE,
-                        RegexOption.DOT_MATCHES_ALL
-                    )
-                ),
-                " "
-            )
-
-        /*
-         * Buang tag HTML.
-         */
-        text =
-            text.replace(
-                Regex(
-                    "<[^>]+>"
-                ),
-                " "
-            )
-
-        /*
-         * Decode beberapa entity umum.
-         */
-        text =
-            text
-                .replace(
-                    "&nbsp;",
-                    " "
-                )
-                .replace(
-                    "&amp;",
-                    "&"
-                )
-                .replace(
-                    "&quot;",
-                    "\""
-                )
-                .replace(
-                    "&#39;",
-                    "'"
-                )
-
-        /*
-         * Rapikan whitespace.
-         */
-        text =
-            text.replace(
-                Regex("\\s+"),
-                " "
-            ).trim()
-
-        return limitText(
-            text,
-            350
-        )
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | LIMIT TEXT
-    |--------------------------------------------------------------------------
-    */
-
-    private fun limitText(
-        value: String,
-        max: Int
-    ): String {
-
-        if (value.length <= max) {
-            return value
-        }
-
-        return value.substring(
-            0,
-            max
-        ) + "..."
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | ERROR JSON
-    |--------------------------------------------------------------------------
-    */
-
     private fun errorJson(
         message: String,
-        httpCode: Int,
-        extra: String = ""
+        httpCode: Int = 0
     ): String {
-
-        val fullMessage =
-            if (extra.isBlank()) {
-                message
-            } else {
-                "$message $extra"
-            }
 
         return """
         {
           "success": false,
-          "message": ${jsonEscape(fullMessage)},
+          "message": ${jsonEscape(message)},
           "http_code": $httpCode
         }
         """.trimIndent()
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | JSON ESCAPE
-    |--------------------------------------------------------------------------
-    */
 
     private fun jsonEscape(
         value: String

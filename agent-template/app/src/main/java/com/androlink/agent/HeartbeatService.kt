@@ -5,24 +5,21 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class HeartbeatService : Service() {
 
-    private val scope =
-        CoroutineScope(
-            SupervisorJob() + Dispatchers.IO
-        )
-
     private lateinit var storage: Storage
+
+    private var heartbeatJob: Job? = null
 
     override fun onCreate() {
 
@@ -30,145 +27,151 @@ class HeartbeatService : Service() {
 
         Config.load(this)
 
-        storage = Storage(this)
+        storage =
+            Storage(this)
 
-        createQuietChannel()
+        createNotificationChannel()
 
         startForeground(
-            NOTIFICATION_ID,
-            buildNotification()
+            1001,
+            createNotification()
         )
 
-        scope.launch {
+        heartbeatJob =
+            CoroutineScope(
+                Dispatchers.IO
+            ).launch {
 
-            while (isActive) {
+                while (isActive) {
 
-                try {
+                    sendHeartbeat()
 
-                    val token =
-                        storage.deviceToken
-
-                    if (!token.isNullOrBlank()) {
-
-                        val result =
-                            Api.heartbeat(
-                                deviceId =
-                                    DeviceInfo.id(
-                                        this@HeartbeatService
-                                    ),
-                                deviceToken =
-                                    token,
-                                sessionToken =
-                                    storage.sessionToken
-                            )
-
-                        if (result.success) {
-
-                            result.json
-                                ?.optString(
-                                    "session_token",
-                                    ""
-                                )
-                                ?.takeIf {
-                                    it.isNotBlank()
-                                }
-                                ?.let {
-                                    storage.sessionToken = it
-                                }
-
-                        } else {
-
-                            /*
-                             * Jangan langsung memutus aplikasi.
-                             * Heartbeat akan dicoba lagi pada siklus berikutnya.
-                             */
-                        }
-                    }
-
-                } catch (_: Exception) {
-
-                    /*
-                     * Coba lagi pada siklus berikutnya.
-                     */
+                    delay(30_000)
                 }
-
-                delay(30_000)
             }
+    }
+
+    private suspend fun sendHeartbeat() {
+
+        val token =
+            storage.deviceToken
+
+        if (
+            token.isNullOrBlank()
+        ) {
+            return
+        }
+
+        val deviceId =
+            if (
+                Config.DEVICE_ID
+                    .isNotBlank()
+            ) {
+
+                Config.DEVICE_ID
+
+            } else {
+
+                DeviceInfo.id(this)
+            }
+
+        try {
+
+            val result =
+                Api.heartbeat(
+                    deviceId =
+                        deviceId,
+                    deviceToken =
+                        token,
+                    sessionToken =
+                        storage.sessionToken
+                )
+
+            if (
+                result.optBoolean(
+                    "success",
+                    false
+                )
+            ) {
+
+                result
+                    .optString(
+                        "session_token"
+                    )
+                    .takeIf {
+                        it.isNotBlank()
+                    }
+                    ?.let {
+                        storage.sessionToken =
+                            it
+                    }
+            }
+
+        } catch (_: Exception) {
+            /*
+             * Heartbeat gagal tidak
+             * menghentikan service.
+             */
         }
     }
 
-    private fun createQuietChannel() {
-
-        val manager =
-            getSystemService(
-                NotificationManager::class.java
-            )
-
-        val channel =
-            NotificationChannel(
-                CHANNEL_ID,
-                "AndroLink berjalan",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-
-                description =
-                    "Status koneksi AndroLink Agent"
-
-                setSound(null, null)
-
-                enableVibration(false)
-
-                setShowBadge(false)
-            }
-
-        manager.createNotificationChannel(channel)
-    }
-
-    private fun buildNotification(): Notification {
+    private fun createNotification(): Notification {
 
         return NotificationCompat
             .Builder(
                 this,
-                CHANNEL_ID
-            )
-            .setSmallIcon(
-                android.R.drawable.stat_sys_upload
+                "androlink_agent"
             )
             .setContentTitle(
                 "AndroLink Agent"
             )
             .setContentText(
-                "Koneksi perangkat aktif"
+                "Agent aktif dan terhubung"
+            )
+            .setSmallIcon(
+                android.R.drawable.stat_sys_upload
             )
             .setOngoing(true)
-            .setSilent(true)
-            .setCategory(
-                NotificationCompat.CATEGORY_SERVICE
-            )
-            .setShowWhen(false)
-            .setPriority(
-                NotificationCompat.PRIORITY_LOW
-            )
             .build()
+    }
+
+    private fun createNotificationChannel() {
+
+        if (
+            Build.VERSION.SDK_INT >=
+            Build.VERSION_CODES.O
+        ) {
+
+            val channel =
+                NotificationChannel(
+                    "androlink_agent",
+                    "AndroLink Agent",
+                    NotificationManager.IMPORTANCE_LOW
+                )
+
+            val manager =
+                getSystemService(
+                    NotificationManager::class.java
+                )
+
+            manager.createNotificationChannel(
+                channel
+            )
+        }
     }
 
     override fun onDestroy() {
 
-        scope.cancel()
+        heartbeatJob?.cancel()
+
+        heartbeatJob = null
 
         super.onDestroy()
     }
 
     override fun onBind(
         intent: Intent?
-    ): IBinder? = null
-
-    companion object {
-
-        private const val CHANNEL_ID =
-            "androlink_service"
-
-        private const val NOTIFICATION_ID =
-            7
+    ): IBinder? {
+        return null
     }
 }

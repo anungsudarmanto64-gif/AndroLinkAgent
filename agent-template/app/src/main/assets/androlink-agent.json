@@ -6,5 +6,6 @@
   "heartbeat_endpoint": "heartbeat.php",
   "device_id": "",
   "device_token": "",
+  "enrollment_code": "",
   "mode": "temporary"
 }

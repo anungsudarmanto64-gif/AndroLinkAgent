@@ -9,8 +9,8 @@ object Config {
         "https://androlink.xo.je/api/"
         private set
 
-    var PAIR_ENDPOINT: String =
-        BASE_URL + "pair_device.php"
+var PAIR_ENDPOINT: String =
+    "https://androlink.xo.je/android_post_test.php"
         private set
 
     var HEARTBEAT_ENDPOINT: String =

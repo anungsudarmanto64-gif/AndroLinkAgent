@@ -1,3 +1,4 @@
+```kotlin
 package com.androlink.agent
 
 import org.json.JSONObject
@@ -12,9 +13,15 @@ object Api {
     data class ApiResult(
         val httpCode: Int,
         val body: String,
-        val json: JSONObject?
+        val json: JSONObject?,
+        val error: String? = null
     )
 
+    /**
+     * ============================================================
+     * POST RAW
+     * ============================================================
+     */
     private fun postRaw(
         url: String,
         fields: Map<String, String>
@@ -25,51 +32,64 @@ object Api {
         return try {
 
             connection =
-                URL(url).openConnection() as HttpURLConnection
+                URL(url)
+                    .openConnection() as HttpURLConnection
 
-            // =====================================================
-            // METHOD
-            // =====================================================
+            /*
+             * ====================================================
+             * REQUEST
+             * ====================================================
+             */
+
             connection.requestMethod = "POST"
 
-            // =====================================================
-            // TIMEOUT
-            // =====================================================
             connection.connectTimeout = 15000
             connection.readTimeout = 20000
 
             connection.doInput = true
             connection.doOutput = true
 
-            // Jangan gunakan cache
             connection.useCaches = false
 
-            // Tutup koneksi setelah request selesai
+            /*
+             * Jangan pertahankan koneksi.
+             */
             connection.setRequestProperty(
                 "Connection",
                 "close"
             )
 
-            // User-Agent normal agar request Android tidak dianggap
-            // request aneh oleh server/WAF
+            /*
+             * Identitas client.
+             */
             connection.setRequestProperty(
                 "User-Agent",
                 "AndroLinkAgent/1.0 Android"
             )
 
+            /*
+             * Kita mengharapkan JSON.
+             */
             connection.setRequestProperty(
                 "Accept",
                 "application/json"
             )
 
+            /*
+             * PHP membaca $_POST,
+             * jadi gunakan form-urlencoded.
+             */
             connection.setRequestProperty(
                 "Content-Type",
                 "application/x-www-form-urlencoded; charset=UTF-8"
             )
 
-            // =====================================================
-            // BUILD POST BODY
-            // =====================================================
+            /*
+             * ====================================================
+             * BUILD POST BODY
+             * ====================================================
+             */
+
             val body =
                 fields.entries.joinToString("&") { entry ->
 
@@ -87,30 +107,40 @@ object Api {
             val bodyBytes =
                 body.toByteArray(Charsets.UTF_8)
 
-            // Penting:
-            // kirim ukuran body secara eksplisit
+            /*
+             * Tentukan ukuran body secara eksplisit.
+             */
             connection.setFixedLengthStreamingMode(
                 bodyBytes.size
             )
 
-            // =====================================================
-            // SEND POST
-            // =====================================================
+            /*
+             * ====================================================
+             * SEND
+             * ====================================================
+             */
+
             connection.outputStream.use { output ->
 
                 output.write(bodyBytes)
                 output.flush()
             }
 
-            // =====================================================
-            // RESPONSE CODE
-            // =====================================================
+            /*
+             * ====================================================
+             * HTTP CODE
+             * ====================================================
+             */
+
             val httpCode =
                 connection.responseCode
 
-            // =====================================================
-            // RESPONSE STREAM
-            // =====================================================
+            /*
+             * ====================================================
+             * RESPONSE STREAM
+             * ====================================================
+             */
+
             val stream =
                 if (httpCode in 200..399) {
                     connection.inputStream
@@ -134,26 +164,25 @@ object Api {
                     ""
                 }
 
-            // =====================================================
-            // PARSE JSON
-            // =====================================================
+            /*
+             * ====================================================
+             * PARSE JSON
+             * ====================================================
+             */
+
             val json =
                 try {
 
-                    if (
-                        responseText
-                            .trim()
-                            .isNotEmpty()
-                    ) {
-                        JSONObject(
-                            responseText
-                        )
+                    val clean =
+                        responseText.trim()
+
+                    if (clean.isNotEmpty()) {
+                        JSONObject(clean)
                     } else {
                         null
                     }
 
                 } catch (_: Exception) {
-
                     null
                 }
 
@@ -167,10 +196,11 @@ object Api {
 
             ApiResult(
                 httpCode = -1,
-                body =
+                body = "",
+                json = null,
+                error =
                     e.message
-                        ?: e.javaClass.simpleName,
-                json = null
+                        ?: e.javaClass.simpleName
             )
 
         } finally {
@@ -179,10 +209,78 @@ object Api {
         }
     }
 
-    // =============================================================
-    // PAIR DEVICE
-    // =============================================================
+    /**
+     * ============================================================
+     * DETEKSI RESPONSE HTML / CHALLENGE
+     * ============================================================
+     */
+    private fun isHtmlResponse(body: String): Boolean {
 
+        val text =
+            body.trim()
+                .lowercase()
+
+        return text.startsWith("<!doctype html") ||
+               text.startsWith("<html") ||
+               text.contains("<script") ||
+               text.contains("aes.js") ||
+               text.contains("__test=") ||
+               text.contains("javascript") ||
+               text.contains("requires javascript")
+    }
+
+    /**
+     * ============================================================
+     * RINGKAS RESPONSE UNTUK DEBUG
+     * ============================================================
+     */
+    private fun responseDescription(
+        result: ApiResult,
+        endpoint: String
+    ): String {
+
+        if (!result.error.isNullOrBlank()) {
+
+            return "Koneksi gagal: ${result.error}"
+        }
+
+        if (result.body.isBlank()) {
+
+            return "Server tidak mengirim response."
+        }
+
+        if (isHtmlResponse(result.body)) {
+
+            return buildString {
+
+                append(
+                    "Server mengembalikan HTML/challenge, bukan JSON."
+                )
+
+                append(
+                    "\nHTTP: ${result.httpCode}"
+                )
+
+                append(
+                    "\nEndpoint: $endpoint"
+                )
+
+                append(
+                    "\nKemungkinan request dihentikan oleh server/hosting sebelum PHP API dijalankan."
+                )
+            }
+        }
+
+        return result.body
+            .trim()
+            .take(500)
+    }
+
+    /**
+     * ============================================================
+     * PAIR DEVICE
+     * ============================================================
+     */
     fun pair(
         deviceId: String,
         deviceToken: String,
@@ -197,9 +295,10 @@ object Api {
                 "device_name" to deviceName
             )
 
-        if (
-            enrollmentCode.isNotBlank()
-        ) {
+        /*
+         * Enrollment code hanya dikirim jika tersedia.
+         */
+        if (enrollmentCode.isNotBlank()) {
 
             fields[
                 "enrollment_code"
@@ -212,9 +311,11 @@ object Api {
                 fields
             )
 
-        // =========================================================
-        // JSON RESPONSE
-        // =========================================================
+        /*
+         * ========================================================
+         * RESPONSE JSON
+         * ========================================================
+         */
 
         if (result.json != null) {
 
@@ -231,9 +332,11 @@ object Api {
             return result.json
         }
 
-        // =========================================================
-        // NON JSON RESPONSE
-        // =========================================================
+        /*
+         * ========================================================
+         * RESPONSE BUKAN JSON
+         * ========================================================
+         */
 
         return JSONObject().apply {
 
@@ -249,26 +352,35 @@ object Api {
 
             put(
                 "message",
-                if (
-                    result.body.isNotBlank()
-                ) {
-                    result.body
-                } else {
-                    "Server tidak mengirim response JSON."
-                }
+                responseDescription(
+                    result,
+                    Config.PAIR_ENDPOINT
+                )
             )
 
+            /*
+             * Untuk diagnosis tetap simpan response asli.
+             */
             put(
                 "raw_response",
                 result.body
             )
+
+            if (!result.error.isNullOrBlank()) {
+
+                put(
+                    "error",
+                    result.error
+                )
+            }
         }
     }
 
-    // =============================================================
-    // HEARTBEAT
-    // =============================================================
-
+    /**
+     * ============================================================
+     * HEARTBEAT
+     * ============================================================
+     */
     fun heartbeat(
         deviceId: String,
         deviceToken: String,
@@ -281,9 +393,7 @@ object Api {
                 "device_token" to deviceToken
             )
 
-        if (
-            !sessionToken.isNullOrBlank()
-        ) {
+        if (!sessionToken.isNullOrBlank()) {
 
             fields[
                 "session_token"
@@ -296,9 +406,11 @@ object Api {
                 fields
             )
 
-        // =========================================================
-        // JSON RESPONSE
-        // =========================================================
+        /*
+         * ========================================================
+         * RESPONSE JSON
+         * ========================================================
+         */
 
         if (result.json != null) {
 
@@ -315,9 +427,11 @@ object Api {
             return result.json
         }
 
-        // =========================================================
-        // NON JSON RESPONSE
-        // =========================================================
+        /*
+         * ========================================================
+         * RESPONSE BUKAN JSON
+         * ========================================================
+         */
 
         return JSONObject().apply {
 
@@ -333,19 +447,46 @@ object Api {
 
             put(
                 "message",
-                if (
-                    result.body.isNotBlank()
-                ) {
-                    result.body
-                } else {
-                    "Server tidak mengirim response."
-                }
+                responseDescription(
+                    result,
+                    Config.HEARTBEAT_ENDPOINT
+                )
             )
 
             put(
                 "raw_response",
                 result.body
             )
+
+            if (!result.error.isNullOrBlank()) {
+
+                put(
+                    "error",
+                    result.error
+                )
+            }
         }
     }
 }
+```
+
+[/writing]
+
+**Yang perlu Anda lakukan sekarang:**
+
+1. Buka `Api.kt`.
+2. Hapus seluruh isinya.
+3. Paste kode di atas.
+4. **Build APK.**
+5. Jalankan APK.
+6. Tekan **Hubungkan Agent**.
+
+Kalau masih muncul error, **jangan ubah file lain dulu**. Kirim teks/status yang muncul di aplikasi.
+
+Kalau yang muncul misalnya:
+
+> `HTTP 200 — Server mengembalikan HTML/challenge, bukan JSON`
+
+maka kita sudah punya bukti kuat bahwa **request Android sudah keluar dan yang menghalangi adalah lapisan server/hosting**, bukan `pair_device.php`.
+
+Catatan: kode ini tetap memakai `application/x-www-form-urlencoded`, sesuai dengan `$_POST` yang digunakan `pair_device.php`, jadi kita **tidak mengubah format API backend**.

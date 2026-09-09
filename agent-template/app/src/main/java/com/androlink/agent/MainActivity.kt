@@ -14,53 +14,35 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.UUID
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var status: TextView
-    private lateinit var detail: TextView
     private lateinit var connect: Button
     private lateinit var disconnect: Button
     private lateinit var storage: Storage
 
-    override fun onCreate(
-        savedInstanceState: Bundle?
-    ) {
-
+    override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        setContentView(
-            R.layout.activity_main
-        )
+        setContentView(R.layout.activity_main)
 
         Config.load(this)
 
         storage = Storage(this)
 
-        status =
-            findViewById(R.id.tvStatus)
+        status = findViewById(R.id.tvStatus)
+        connect = findViewById(R.id.btnConnect)
+        disconnect = findViewById(R.id.btnDisconnect)
 
-        detail =
-            findViewById(R.id.tvDetail)
-
-        connect =
-            findViewById(R.id.btnConnect)
-
-        disconnect =
-            findViewById(R.id.btnDisconnect)
-
-        findViewById<TextView>(
-            R.id.tvDevice
-        ).text =
+        findViewById<TextView>(R.id.tvDevice).text =
             "Perangkat: ${DeviceInfo.name()}"
 
-        findViewById<TextView>(
-            R.id.tvAndroid
-        ).text =
+        findViewById<TextView>(R.id.tvAndroid).text =
             "Android: ${DeviceInfo.android()}"
 
-        connect.text =
-            "HUBUNGKAN AGENT"
+        connect.text = "Hubungkan Agent"
 
         connect.setOnClickListener {
             pair()
@@ -70,30 +52,6 @@ class MainActivity : AppCompatActivity() {
             disconnectAgent()
         }
 
-        requestNotificationPermission()
-
-        /*
-         * AUTOMATIC ENROLLMENT
-         */
-        if (Config.isEnrolled()) {
-
-            detail.text =
-                "Device ID: ${Config.DEVICE_ID}"
-
-            pair()
-
-        } else {
-
-            status.text =
-                "Status: Konfigurasi APK tidak lengkap"
-
-            detail.text =
-                "Device ID / token / enrollment code tidak ditemukan."
-        }
-    }
-
-    private fun requestNotificationPermission() {
-
         if (
             android.os.Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(
@@ -101,107 +59,129 @@ class MainActivity : AppCompatActivity() {
                 Manifest.permission.POST_NOTIFICATIONS
             ) != PackageManager.PERMISSION_GRANTED
         ) {
-
             ActivityCompat.requestPermissions(
                 this,
-                arrayOf(
-                    Manifest.permission.POST_NOTIFICATIONS
-                ),
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
                 11
             )
+        }
+
+        /*
+         * Jangan langsung melakukan pairing berulang-ulang
+         * kalau konfigurasi APK kosong.
+         */
+        if (
+            Config.DEVICE_ID.isNotBlank() &&
+            Config.DEVICE_TOKEN.isNotBlank()
+        ) {
+
+            status.text = "Status: Siap menghubungkan"
+
+        } else {
+
+            status.text =
+                "Status: APK belum memiliki konfigurasi enrollment"
         }
     }
 
     private fun pair() {
 
-        if (!Config.isEnrolled()) {
-
-            status.text =
-                "Status: APK belum terdaftar"
-
-            detail.text =
-                "Buat Agent baru dari dashboard."
-
+        if (connect.isEnabled.not()) {
             return
         }
 
         connect.isEnabled = false
 
-        status.text =
-            "Status: Mendaftarkan Agent..."
+        disconnect.visibility = View.GONE
 
-        detail.text =
-            "Menghubungkan ke server..."
+        status.text = "Status: Menghubungkan..."
 
-        CoroutineScope(
-            Dispatchers.Main
-        ).launch {
+        CoroutineScope(Dispatchers.Main).launch {
 
             try {
 
-                val response =
-                    withContext(
-                        Dispatchers.IO
-                    ) {
+                val deviceId =
+                    if (Config.DEVICE_ID.isNotBlank()) {
+                        Config.DEVICE_ID.trim()
+                    } else {
+                        DeviceInfo.id(this@MainActivity).trim()
+                    }
 
+                val deviceToken =
+                    if (Config.DEVICE_TOKEN.isNotBlank()) {
+                        Config.DEVICE_TOKEN.trim()
+                    } else {
+                        storage.deviceToken
+                            ?.trim()
+                            ?.takeIf { it.isNotEmpty() }
+                            ?: UUID.randomUUID()
+                                .toString()
+                                .replace("-", "")
+                                .also {
+                                    storage.deviceToken = it
+                                }
+                    }
+
+                if (deviceId.isBlank()) {
+
+                    status.text =
+                        "Status: Device ID kosong"
+
+                    return@launch
+                }
+
+                if (deviceToken.isBlank()) {
+
+                    status.text =
+                        "Status: Device Token kosong"
+
+                    return@launch
+                }
+
+                /*
+                 * Simpan token sebelum request.
+                 */
+                storage.deviceToken = deviceToken
+
+                val result =
+                    withContext(Dispatchers.IO) {
                         Api.pair(
-                            Config.DEVICE_ID,
-                            Config.DEVICE_TOKEN,
-                            Config.ENROLLMENT_CODE
+                            deviceId = deviceId,
+                            deviceToken = deviceToken
                         )
                     }
 
-                if (
-                    response.optBoolean(
-                        "success",
-                        false
-                    )
-                ) {
+                /*
+                 * DEBUG RESPONSE
+                 *
+                 * Kita sekarang tahu:
+                 * - HTTP code
+                 * - JSON
+                 * - response mentah
+                 */
 
-                    /*
-                     * Server kita mengembalikan
-                     * token di root JSON.
-                     */
-                    val sessionToken =
-                        response
-                            .optString(
-                                "session_token",
-                                ""
-                            )
-                            .takeIf {
-                                it.isNotBlank()
-                            }
+                if (result.success) {
 
-                    val pcToken =
-                        response
-                            .optString(
-                                "pc_token",
-                                ""
-                            )
-                            .takeIf {
-                                it.isNotBlank()
-                            }
+                    val json = result.json
 
                     storage.sessionToken =
-                        sessionToken
+                        json
+                            ?.optString("session_token", "")
+                            ?.takeIf { it.isNotBlank() }
 
                     storage.pcToken =
-                        pcToken
-
-                    storage.deviceToken =
-                        Config.DEVICE_TOKEN
+                        json
+                            ?.optString("pc_token", "")
+                            ?.takeIf { it.isNotBlank() }
 
                     storage.mode =
-                        response.optString(
-                            "mode",
-                            Config.MODE
-                        )
+                        json
+                            ?.optString("mode", "")
+                            ?.takeIf { it.isNotBlank() }
+                            ?: Config.MODE
 
                     status.text =
                         "Status: TERHUBUNG"
-
-                    detail.text =
-                        "Device ID: ${Config.DEVICE_ID}"
 
                     disconnect.visibility =
                         View.VISIBLE
@@ -219,53 +199,23 @@ class MainActivity : AppCompatActivity() {
 
                 } else {
 
-                    val message =
-                        response.optString(
-                            "message",
-                            "Pendaftaran ditolak."
-                        )
-
-                    val httpCode =
-                        response.optInt(
-                            "http_code",
-                            0
-                        )
-
-                    val raw =
-                        response.optString(
-                            "raw_response",
-                            ""
-                        )
+                    val detail =
+                        result.message
 
                     status.text =
-                        if (httpCode > 0) {
-
-                            "Status: $message (HTTP $httpCode)"
-
+                        if (result.httpCode > 0) {
+                            "Status: HTTP ${result.httpCode} - $detail"
                         } else {
-
-                            "Status: $message"
-                        }
-
-                    detail.text =
-                        if (raw.isNotBlank()) {
-
-                            raw.take(500)
-
-                        } else {
-
-                            "Device ID: ${Config.DEVICE_ID}"
+                            "Status: $detail"
                         }
                 }
 
             } catch (e: Exception) {
 
                 status.text =
-                    "Status: Gagal terhubung"
-
-                detail.text =
-                    e.message
-                        ?: "Kesalahan tidak diketahui."
+                    "Status: Error - ${
+                        e.message ?: e.javaClass.simpleName
+                    }"
 
             } finally {
 
@@ -288,13 +238,13 @@ class MainActivity : AppCompatActivity() {
         status.text =
             "Status: Terputus"
 
-        detail.text =
-            "Agent tidak terhubung."
-
         disconnect.visibility =
             View.GONE
 
         connect.visibility =
             View.VISIBLE
+
+        connect.isEnabled =
+            true
     }
 }

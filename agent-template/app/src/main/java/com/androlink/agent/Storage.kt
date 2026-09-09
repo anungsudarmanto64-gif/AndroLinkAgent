@@ -2,47 +2,40 @@ package com.androlink.agent
 
 import android.content.Context
 
-class Storage(c: Context) {
+class Storage(context: Context) {
 
-    private val p = c.getSharedPreferences(
+    private val prefs = context.getSharedPreferences(
         "androlink_agent",
         Context.MODE_PRIVATE
     )
 
     var deviceToken: String?
-        get() = p.getString("device_token", null)
-        set(v) {
-            p.edit()
-                .putString("device_token", v)
-                .apply()
+        get() = prefs.getString("device_token", null)
+        set(value) {
+            prefs.edit().putString("device_token", value).apply()
         }
 
     var sessionToken: String?
-        get() = p.getString("session_token", null)
-        set(v) {
-            p.edit()
-                .putString("session_token", v)
-                .apply()
+        get() = prefs.getString("session_token", null)
+        set(value) {
+            prefs.edit().putString("session_token", value).apply()
         }
 
     var pcToken: String?
-        get() = p.getString("pc_token", null)
-        set(v) {
-            p.edit()
-                .putString("pc_token", v)
-                .apply()
+        get() = prefs.getString("pc_token", null)
+        set(value) {
+            prefs.edit().putString("pc_token", value).apply()
         }
 
     var mode: String?
-        get() = p.getString("mode", null)
-        set(v) {
-            p.edit()
-                .putString("mode", v)
-                .apply()
+        get() = prefs.getString("mode", null)
+        set(value) {
+            prefs.edit().putString("mode", value).apply()
         }
 
     fun clear() {
-        p.edit()
+        prefs.edit()
+            .remove("device_token")
             .remove("session_token")
             .remove("pc_token")
             .remove("mode")

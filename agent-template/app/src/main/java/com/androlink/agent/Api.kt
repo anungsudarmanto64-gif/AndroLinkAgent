@@ -1,46 +1,21 @@
 package com.androlink.agent
 
 import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 
-data class ApiResult(
-    val httpCode: Int,
-    val body: String,
-    val json: JSONObject?
-) {
-    val isHttpSuccess: Boolean
-        get() = httpCode in 200..299
-
-    val success: Boolean
-        get() = json?.optBoolean("success", false) == true
-
-    val message: String
-        get() {
-            val serverMessage = json?.optString("message", "")?.trim()
-
-            if (!serverMessage.isNullOrEmpty()) {
-                return serverMessage
-            }
-
-            return when {
-                httpCode == 400 -> "Request ditolak server (HTTP 400)"
-                httpCode == 401 -> "Tidak diizinkan (HTTP 401)"
-                httpCode == 403 -> "Akses ditolak (HTTP 403)"
-                httpCode == 404 -> "Endpoint tidak ditemukan (HTTP 404)"
-                httpCode in 500..599 -> "Server mengalami kesalahan (HTTP $httpCode)"
-                else -> "HTTP $httpCode"
-            }
-        }
-}
-
 object Api {
 
-    private const val CONNECT_TIMEOUT = 15_000
-    private const val READ_TIMEOUT = 20_000
+    data class ApiResult(
+        val httpCode: Int,
+        val body: String,
+        val json: JSONObject?
+    )
 
-    fun post(
+    private fun postRaw(
         url: String,
         fields: Map<String, String>
     ): ApiResult {
@@ -49,13 +24,16 @@ object Api {
 
         return try {
 
-            connection = URL(url).openConnection() as HttpURLConnection
+            connection =
+                URL(url)
+                    .openConnection() as HttpURLConnection
 
             connection.requestMethod = "POST"
-            connection.connectTimeout = CONNECT_TIMEOUT
-            connection.readTimeout = READ_TIMEOUT
+
+            connection.connectTimeout = 15000
+            connection.readTimeout = 20000
+
             connection.doOutput = true
-            connection.useCaches = false
 
             connection.setRequestProperty(
                 "Content-Type",
@@ -67,48 +45,75 @@ object Api {
                 "application/json"
             )
 
-            connection.setRequestProperty(
-                "User-Agent",
-                "AndroLinkAgent/1.0"
-            )
+            val body =
+                fields.entries.joinToString("&") {
 
-            val body = fields.entries.joinToString("&") { entry ->
-                val key = URLEncoder.encode(
-                    entry.key,
-                    "UTF-8"
+                    URLEncoder.encode(
+                        it.key,
+                        "UTF-8"
+                    ) +
+                    "=" +
+                    URLEncoder.encode(
+                        it.value,
+                        "UTF-8"
+                    )
+                }
+
+            connection.outputStream.use {
+                it.write(
+                    body.toByteArray(
+                        Charsets.UTF_8
+                    )
                 )
-
-                val value = URLEncoder.encode(
-                    entry.value,
-                    "UTF-8"
-                )
-
-                "$key=$value"
             }
 
-            connection.outputStream.use { output ->
-                output.write(body.toByteArray(Charsets.UTF_8))
-                output.flush()
-            }
-
-            val code = connection.responseCode
+            val httpCode =
+                connection.responseCode
 
             val stream =
-                if (code in 200..299) {
+                if (httpCode in 200..399) {
                     connection.inputStream
                 } else {
                     connection.errorStream
                 }
 
             val responseText =
-                stream?.bufferedReader(Charsets.UTF_8)?.use {
-                    it.readText()
-                } ?: ""
+                if (stream != null) {
 
-            val json = parseJson(responseText)
+                    BufferedReader(
+                        InputStreamReader(
+                            stream,
+                            Charsets.UTF_8
+                        )
+                    ).use {
+                        it.readText()
+                    }
+
+                } else {
+                    ""
+                }
+
+            val json =
+                try {
+
+                    if (
+                        responseText
+                            .trim()
+                            .isNotEmpty()
+                    ) {
+                        JSONObject(
+                            responseText
+                        )
+                    } else {
+                        null
+                    }
+
+                } catch (_: Exception) {
+                    null
+                }
 
             ApiResult(
-                httpCode = code,
+                httpCode = httpCode,
                 body = responseText,
                 json = json
             )
@@ -117,75 +122,173 @@ object Api {
 
             ApiResult(
                 httpCode = -1,
-                body = e.message ?: e.javaClass.simpleName,
+                body =
+                    e.message
+                        ?: e.javaClass.simpleName,
                 json = null
             )
 
         } finally {
+
             connection?.disconnect()
         }
     }
 
     fun pair(
         deviceId: String,
-        deviceToken: String
-    ): ApiResult {
+        deviceToken: String,
+        enrollmentCode: String,
+        deviceName: String
+    ): JSONObject {
 
-        return post(
-            Config.PAIR_ENDPOINT,
-            mapOf(
+        val fields =
+            linkedMapOf(
                 "device_id" to deviceId,
-                "device_token" to deviceToken
+                "device_token" to deviceToken,
+                "device_name" to deviceName
             )
-        )
+
+        if (
+            enrollmentCode
+                .isNotBlank()
+        ) {
+
+            fields[
+                "enrollment_code"
+            ] = enrollmentCode
+        }
+
+        val result =
+            postRaw(
+                Config.PAIR_ENDPOINT,
+                fields
+            )
+
+        if (result.json != null) {
+
+            result.json.put(
+                "http_code",
+                result.httpCode
+            )
+
+            if (
+                result.body
+                    .isNotBlank()
+            ) {
+
+                result.json.put(
+                    "raw_response",
+                    result.body
+                )
+            }
+
+            return result.json
+        }
+
+        /*
+         * Jangan lagi membuat:
+         *
+         * HTTP 200 - HTTP 200
+         *
+         * sebagai response palsu.
+         */
+        return JSONObject().apply {
+
+            put(
+                "success",
+                false
+            )
+
+            put(
+                "http_code",
+                result.httpCode
+            )
+
+            put(
+                "message",
+                if (
+                    result.body
+                        .isNotBlank()
+                ) {
+                    result.body
+                } else {
+                    "Server tidak mengirim response JSON."
+                }
+            )
+
+            put(
+                "raw_response",
+                result.body
+            )
+        }
     }
 
     fun heartbeat(
         deviceId: String,
         deviceToken: String,
         sessionToken: String?
-    ): ApiResult {
+    ): JSONObject {
 
-        val fields = mutableMapOf(
-            "device_id" to deviceId,
-            "device_token" to deviceToken
-        )
+        val fields =
+            linkedMapOf(
+                "device_id" to deviceId,
+                "device_token" to deviceToken
+            )
 
-        if (!sessionToken.isNullOrBlank()) {
-            fields["session_token"] = sessionToken
+        if (
+            !sessionToken
+                .isNullOrBlank()
+        ) {
+
+            fields[
+                "session_token"
+            ] = sessionToken
         }
 
-        return post(
-            Config.HEARTBEAT_ENDPOINT,
-            fields
-        )
-    }
+        val result =
+            postRaw(
+                Config.HEARTBEAT_ENDPOINT,
+                fields
+            )
 
-    private fun parseJson(text: String): JSONObject? {
+        if (result.json != null) {
 
-        val cleaned = text.trim()
+            result.json.put(
+                "http_code",
+                result.httpCode
+            )
 
-        if (cleaned.isEmpty()) {
-            return null
+            return result.json
         }
 
-        return try {
-            JSONObject(cleaned)
-        } catch (_: Exception) {
+        return JSONObject().apply {
 
-            /*
-             * Kadang server hosting menghasilkan whitespace/BOM.
-             * Coba bersihkan BOM sebelum parsing.
-             */
-            try {
-                JSONObject(
-                    cleaned
-                        .removePrefix("\uFEFF")
-                        .trim()
-                )
-            } catch (_: Exception) {
-                null
-            }
+            put(
+                "success",
+                false
+            )
+
+            put(
+                "http_code",
+                result.httpCode
+            )
+
+            put(
+                "message",
+                if (
+                    result.body
+                        .isNotBlank()
+                ) {
+                    result.body
+                } else {
+                    "Server tidak mengirim response."
+                }
+            )
+
+            put(
+                "raw_response",
+                result.body
+            )
         }
     }
 }

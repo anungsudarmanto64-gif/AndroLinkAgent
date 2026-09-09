@@ -8,37 +8,59 @@ import java.net.URLEncoder
 
 object Api {
 
+    /*
+     * =========================================================
+     * URL ENCODING
+     * =========================================================
+     */
     private fun encode(
         value: String
     ): String {
+
         return URLEncoder.encode(
             value,
             "UTF-8"
         )
     }
 
+    /*
+     * =========================================================
+     * POST REQUEST
+     * =========================================================
+     */
     private fun post(
         endpoint: String,
         params: Map<String, String>
     ): String {
-
-        val url = URL(endpoint)
-
-        val body =
-            params.entries.joinToString("&") {
-                "${encode(it.key)}=${encode(it.value)}"
-            }
-
-        val bodyBytes =
-            body.toByteArray(
-                Charsets.UTF_8
-            )
 
         var connection:
             HttpURLConnection? = null
 
         try {
 
+            /*
+             * Endpoint.
+             */
+            val url =
+                URL(endpoint)
+
+            /*
+             * Form-urlencoded body.
+             */
+            val body =
+                params.entries.joinToString("&") {
+
+                    "${encode(it.key)}=${encode(it.value)}"
+                }
+
+            val bodyBytes =
+                body.toByteArray(
+                    Charsets.UTF_8
+                )
+
+            /*
+             * Connection.
+             */
             connection =
                 url.openConnection()
                     as HttpURLConnection
@@ -64,6 +86,9 @@ object Api {
             connection.instanceFollowRedirects =
                 true
 
+            /*
+             * Header.
+             */
             connection.setRequestProperty(
                 "Content-Type",
                 "application/x-www-form-urlencoded; charset=UTF-8"
@@ -72,6 +97,11 @@ object Api {
             connection.setRequestProperty(
                 "Accept",
                 "application/json"
+            )
+
+            connection.setRequestProperty(
+                "User-Agent",
+                "AndroLinkAgent/1.0"
             )
 
             connection.setRequestProperty(
@@ -84,15 +114,15 @@ object Api {
                 "no-cache"
             )
 
-            connection.setRequestProperty(
-                "User-Agent",
-                "AndroLinkAgent/1.0 Android"
-            )
-
             connection.setFixedLengthStreamingMode(
                 bodyBytes.size
             )
 
+            /*
+             * =====================================================
+             * SEND POST
+             * =====================================================
+             */
             connection.outputStream.use { output ->
 
                 output.write(
@@ -102,24 +132,49 @@ object Api {
                 output.flush()
             }
 
+            /*
+             * =====================================================
+             * HTTP RESPONSE
+             * =====================================================
+             */
             val responseCode =
                 connection.responseCode
 
+            /*
+             * Ambil stream sesuai status HTTP.
+             */
             val inputStream =
-                if (responseCode in 200..399) {
+                if (
+                    responseCode in 200..399
+                ) {
+
                     connection.inputStream
+
                 } else {
+
                     connection.errorStream
                 }
 
-            if (inputStream == null) {
+            /*
+             * Tidak ada response.
+             */
+            if (
+                inputStream == null
+            ) {
 
                 return errorJson(
-                    "Server tidak mengirim response.",
-                    responseCode
+                    message =
+                        "Server tidak mengirim response.",
+                    httpCode =
+                        responseCode
                 )
             }
 
+            /*
+             * =====================================================
+             * READ RESPONSE
+             * =====================================================
+             */
             val response =
                 StringBuilder()
 
@@ -130,13 +185,11 @@ object Api {
                 )
             ).use { reader ->
 
-                var line: String?
+                while (true) {
 
-                while (
-                    reader.readLine().also {
-                        line = it
-                    } != null
-                ) {
+                    val line =
+                        reader.readLine()
+                            ?: break
 
                     response.append(
                         line
@@ -153,57 +206,121 @@ object Api {
                     .toString()
                     .trim()
 
-            if (result.isEmpty()) {
+            /*
+             * =====================================================
+             * RESPONSE KOSONG
+             * =====================================================
+             */
+            if (
+                result.isEmpty()
+            ) {
 
                 return errorJson(
-                    "Response server kosong.",
-                    responseCode
+                    message =
+                        "Response server kosong.",
+                    httpCode =
+                        responseCode
                 )
             }
 
             /*
-             * Server seharusnya mengembalikan JSON.
-             * Kalau ternyata HTML, tampilkan informasi
-             * secukupnya supaya sumber masalah terlihat.
+             * =====================================================
+             * HTML / CLOUDFLARE / INFINITYFREE
+             * =====================================================
              */
             if (
-                result.contains(
-                    "<html",
-                    ignoreCase = true
-                ) ||
-                result.contains(
-                    "<!doctype",
-                    ignoreCase = true
-                ) ||
-                result.contains(
-                    "<head",
-                    ignoreCase = true
-                ) ||
-                result.contains(
-                    "<body",
-                    ignoreCase = true
-                )
+                isHtml(result)
             ) {
 
                 val title =
-                    extractTitle(result)
+                    extractTitle(
+                        result
+                    )
 
                 return errorJson(
-                    "Server mengembalikan HTML/challenge. " +
-                    "HTTP $responseCode. " +
-                    "Title: $title"
+                    message =
+                        "Server mengembalikan HTML/challenge. " +
+                        "HTTP $responseCode. " +
+                        "Title: $title. " +
+                        "Preview: ${preview(result)}",
+                    httpCode =
+                        responseCode
                 )
             }
 
-            return result
+            /*
+             * =====================================================
+             * VALIDASI RESPONSE JSON
+             * =====================================================
+             *
+             * Jangan mengembalikan response mentah kalau
+             * response bukan JSON.
+             */
+            if (
+                !looksLikeJson(result)
+            ) {
+
+                return errorJson(
+                    message =
+                        "Server mengembalikan data bukan JSON. " +
+                        "HTTP $responseCode. " +
+                        "Preview: ${preview(result)}",
+                    httpCode =
+                        responseCode
+                )
+            }
+
+            /*
+             * =====================================================
+             * JSON CLEANUP
+             * =====================================================
+             *
+             * Hilangkan BOM UTF-8 jika ada.
+             */
+            val cleanResult =
+                result
+                    .removePrefix("\uFEFF")
+                    .trim()
+
+            /*
+             * Pastikan benar-benar JSON object.
+             */
+            if (
+                !cleanResult.startsWith("{") ||
+                !cleanResult.endsWith("}")
+            ) {
+
+                return errorJson(
+                    message =
+                        "Format JSON server tidak valid. " +
+                        "HTTP $responseCode. " +
+                        "Preview: ${preview(cleanResult)}",
+                    httpCode =
+                        responseCode
+                )
+            }
+
+            /*
+             * Response JSON valid secara bentuk.
+             */
+            return cleanResult
 
         } catch (e: Exception) {
 
+            /*
+             * =====================================================
+             * NETWORK ERROR
+             * =====================================================
+             */
             return errorJson(
-                "Gagal menghubungi server: ${
-                    e.message
-                        ?: e.javaClass.simpleName
-                }"
+                message =
+                    "Gagal menghubungi server: " +
+                    (
+                        e.message
+                            ?: e.javaClass.simpleName
+                    ),
+                httpCode =
+                    0
             )
 
         } finally {
@@ -212,6 +329,11 @@ object Api {
         }
     }
 
+    /*
+     * =========================================================
+     * PAIR DEVICE
+     * =========================================================
+     */
     fun pair(
         deviceId: String,
         deviceToken: String,
@@ -220,16 +342,24 @@ object Api {
     ): String {
 
         return post(
-            Config.PAIR_ENDPOINT,
-            mapOf(
-                "device_id" to deviceId,
-                "device_token" to deviceToken,
-                "enrollment_code" to enrollmentCode,
-                "device_name" to deviceName
-            )
+            endpoint =
+                Config.PAIR_ENDPOINT,
+
+            params =
+                mapOf(
+                    "device_id" to deviceId,
+                    "device_token" to deviceToken,
+                    "enrollment_code" to enrollmentCode,
+                    "device_name" to deviceName
+                )
         )
     }
 
+    /*
+     * =========================================================
+     * HEARTBEAT
+     * =========================================================
+     */
     fun heartbeat(
         deviceId: String,
         deviceToken: String,
@@ -237,15 +367,92 @@ object Api {
     ): String {
 
         return post(
-            Config.HEARTBEAT_ENDPOINT,
-            mapOf(
-                "device_id" to deviceId,
-                "device_token" to deviceToken,
-                "session_token" to sessionToken
-            )
+            endpoint =
+                Config.HEARTBEAT_ENDPOINT,
+
+            params =
+                mapOf(
+                    "device_id" to deviceId,
+                    "device_token" to deviceToken,
+                    "session_token" to sessionToken
+                )
         )
     }
 
+    /*
+     * =========================================================
+     * CHECK HTML
+     * =========================================================
+     */
+    private fun isHtml(
+        value: String
+    ): Boolean {
+
+        return value.contains(
+            "<html",
+            ignoreCase = true
+        ) ||
+        value.contains(
+            "<!doctype",
+            ignoreCase = true
+        ) ||
+        value.contains(
+            "<head",
+            ignoreCase = true
+        ) ||
+        value.contains(
+            "<body",
+            ignoreCase = true
+        )
+    }
+
+    /*
+     * =========================================================
+     * CHECK JSON
+     * =========================================================
+     */
+    private fun looksLikeJson(
+        value: String
+    ): Boolean {
+
+        val text =
+            value
+                .removePrefix("\uFEFF")
+                .trim()
+
+        return (
+            text.startsWith("{") &&
+            text.endsWith("}")
+        ) ||
+        (
+            text.startsWith("[") &&
+            text.endsWith("]")
+        )
+    }
+
+    /*
+     * =========================================================
+     * RESPONSE PREVIEW
+     * =========================================================
+     */
+    private fun preview(
+        value: String
+    ): String {
+
+        return value
+            .replace(
+                Regex("\\s+"),
+                " "
+            )
+            .trim()
+            .take(300)
+    }
+
+    /*
+     * =========================================================
+     * EXTRACT HTML TITLE
+     * =========================================================
+     */
     private fun extractTitle(
         html: String
     ): String {
@@ -262,7 +469,9 @@ object Api {
         val match =
             regex.find(html)
 
-        if (match != null) {
+        if (
+            match != null
+        ) {
 
             return match
                 .groupValues[1]
@@ -281,9 +490,14 @@ object Api {
         return "Tidak diketahui"
     }
 
+    /*
+     * =========================================================
+     * ERROR JSON
+     * =========================================================
+     */
     private fun errorJson(
         message: String,
-        httpCode: Int = 0
+        httpCode: Int
     ): String {
 
         return """
@@ -295,6 +509,11 @@ object Api {
         """.trimIndent()
     }
 
+    /*
+     * =========================================================
+     * JSON ESCAPE
+     * =========================================================
+     */
     private fun jsonEscape(
         value: String
     ): String {

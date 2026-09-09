@@ -33,11 +33,19 @@ class MainActivity : AppCompatActivity() {
             R.layout.activity_main
         )
 
+        /*
+         * Load konfigurasi APK.
+         */
         Config.load(this)
 
-        storage =
-            Storage(this)
+        /*
+         * Storage lokal.
+         */
+        storage = Storage(this)
 
+        /*
+         * UI.
+         */
         status =
             findViewById(
                 R.id.tvStatus
@@ -53,6 +61,9 @@ class MainActivity : AppCompatActivity() {
                 R.id.btnDisconnect
             )
 
+        /*
+         * Informasi perangkat.
+         */
         findViewById<TextView>(
             R.id.tvDevice
         ).text =
@@ -63,78 +74,49 @@ class MainActivity : AppCompatActivity() {
         ).text =
             "Android: ${DeviceInfo.android()}"
 
+        /*
+         * Default UI.
+         */
         connect.text =
             "Hubungkan Agent"
 
+        disconnect.visibility =
+            View.GONE
+
+        /*
+         * Tombol CONNECT.
+         */
         connect.setOnClickListener {
+
             pair()
         }
 
+        /*
+         * Tombol DISCONNECT.
+         */
         disconnect.setOnClickListener {
 
-            /*
-             * Hentikan service terlebih dahulu.
-             */
-            stopService(
-                Intent(
-                    this,
-                    HeartbeatService::class.java
-                )
-            )
-
-            /*
-             * Hapus session pairing.
-             *
-             * clearAll() digunakan karena
-             * tombol disconnect berarti
-             * memutus seluruh data pairing lokal.
-             */
-            storage.clearAll()
-
-            /*
-             * Status lokal selalu MATI setelah disconnect.
-             */
-            storage.agentEnabled = false
-
-            status.text =
-                "Status: Terputus"
-
-            disconnect.visibility =
-                View.GONE
-
-            connect.visibility =
-                View.VISIBLE
+            disconnectAgent()
         }
 
         /*
          * Permission notifikasi Android 13+.
          */
-        if (
-            android.os.Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.POST_NOTIFICATIONS
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-
-            ActivityCompat.requestPermissions(
-                this,
-                arrayOf(
-                    Manifest.permission.POST_NOTIFICATIONS
-                ),
-                11
-            )
-        }
+        requestNotificationPermission()
 
         /*
-         * Kalau APK memiliki konfigurasi
-         * enrollment, coba pairing otomatis.
+         * Jika APK hasil generator mempunyai
+         * konfigurasi enrollment lengkap,
+         * langsung coba pairing.
          */
         if (
             Config.DEVICE_ID.isNotBlank() &&
             Config.DEVICE_TOKEN.isNotBlank() &&
             Config.ENROLLMENT_CODE.isNotBlank()
         ) {
+
+            status.text =
+                "Status: Konfigurasi ditemukan\nMemulai pairing..."
 
             pair()
 
@@ -145,8 +127,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /*
+     * =========================================================
+     * PAIRING
+     * =========================================================
+     */
     private fun pair() {
 
+        /*
+         * Enrollment code wajib ada.
+         */
         if (
             Config.ENROLLMENT_CODE.isBlank()
         ) {
@@ -157,8 +147,14 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        /*
+         * Cegah tombol ditekan berkali-kali.
+         */
         connect.isEnabled =
             false
+
+        disconnect.visibility =
+            View.GONE
 
         status.text =
             "Status: Menghubungkan ke server..."
@@ -170,23 +166,34 @@ class MainActivity : AppCompatActivity() {
             try {
 
                 /*
-                 * Token dari konfigurasi generator.
+                 * =================================================
+                 * DEVICE TOKEN
+                 * =================================================
                  *
-                 * Jika tidak tersedia,
-                 * gunakan token lokal.
+                 * Prioritas:
+                 *
+                 * 1. Token dari APK generator.
+                 * 2. Token lokal yang tersimpan.
+                 * 3. Generate token baru.
                  */
                 val token =
-                    if (
-                        Config.DEVICE_TOKEN
-                            .isNotBlank()
-                    ) {
+                    when {
 
                         Config.DEVICE_TOKEN
+                            .isNotBlank() -> {
 
-                    } else {
+                            Config.DEVICE_TOKEN
+                        }
 
-                        storage.deviceToken
-                            ?: UUID
+                        !storage.deviceToken
+                            .isNullOrBlank() -> {
+
+                            storage.deviceToken!!
+                        }
+
+                        else -> {
+
+                            UUID
                                 .randomUUID()
                                 .toString()
                                 .replace(
@@ -194,15 +201,22 @@ class MainActivity : AppCompatActivity() {
                                     ""
                                 )
                                 .also {
+
                                     storage.deviceToken =
                                         it
                                 }
+                        }
                     }
 
                 /*
-                 * Device ID dari konfigurasi generator.
+                 * =================================================
+                 * DEVICE ID
+                 * =================================================
                  *
-                 * Jika kosong, gunakan ANDROID_ID.
+                 * Jika generator memberikan Device ID,
+                 * gunakan Device ID tersebut.
+                 *
+                 * Kalau kosong, gunakan DeviceInfo.id().
                  */
                 val deviceId =
                     if (
@@ -219,20 +233,40 @@ class MainActivity : AppCompatActivity() {
                         )
                     }
 
-                storage.deviceToken =
-                    token
-
+                /*
+                 * Simpan identitas lokal.
+                 */
                 storage.deviceId =
                     deviceId
+
+                storage.deviceToken =
+                    token
 
                 storage.enrollmentCode =
                     Config.ENROLLMENT_CODE
 
+                /*
+                 * Informasi proses.
+                 */
                 status.text =
-                    "Status: Mengirim data perangkat..."
+                    """
+                    Status: Mempersiapkan pairing...
+                    
+                    Device ID:
+                    $deviceId
+                    
+                    Enrollment:
+                    ${Config.ENROLLMENT_CODE}
+                    
+                    Menghubungi server...
+                    """.trimIndent()
 
                 /*
-                 * Request pairing dilakukan di IO thread.
+                 * =================================================
+                 * REQUEST PAIRING
+                 * =================================================
+                 *
+                 * Network dijalankan di IO thread.
                  */
                 val resultString =
                     withContext(
@@ -242,43 +276,118 @@ class MainActivity : AppCompatActivity() {
                         Api.pair(
                             deviceId =
                                 deviceId,
+
                             deviceToken =
                                 token,
+
                             enrollmentCode =
                                 Config.ENROLLMENT_CODE,
+
                             deviceName =
                                 DeviceInfo.name()
                         )
                     }
 
                 /*
-                 * Api.pair() mengembalikan STRING JSON.
-                 *
-                 * Jadi harus diubah menjadi JSONObject
-                 * terlebih dahulu.
+                 * =================================================
+                 * VALIDASI RESPONSE
+                 * =================================================
+                 */
+                val raw =
+                    resultString
+                        .trim()
+
+                /*
+                 * Response kosong.
+                 */
+                if (raw.isBlank()) {
+
+                    status.text =
+                        """
+                        PAIRING GAGAL
+                        
+                        Server mengirim response kosong.
+                        """.trimIndent()
+
+                    return@launch
+                }
+
+                /*
+                 * Jangan langsung JSONObject jika
+                 * response jelas bukan JSON.
+                 */
+                if (
+                    raw.startsWith("<") ||
+                    raw.contains(
+                        "<html",
+                        ignoreCase = true
+                    ) ||
+                    raw.contains(
+                        "<!doctype",
+                        ignoreCase = true
+                    ) ||
+                    raw.contains(
+                        "<head",
+                        ignoreCase = true
+                    ) ||
+                    raw.contains(
+                        "<body",
+                        ignoreCase = true
+                    )
+                ) {
+
+                    status.text =
+                        """
+                        PAIRING GAGAL
+                        
+                        Server tidak mengirim JSON.
+                        
+                        Response:
+                        ${cleanPreview(raw)}
+                        """.trimIndent()
+
+                    return@launch
+                }
+
+                /*
+                 * =================================================
+                 * PARSE JSON
+                 * =================================================
                  */
                 val result =
                     try {
 
-                        JSONObject(
-                            resultString.trim()
-                        )
+                        JSONObject(raw)
 
                     } catch (e: Exception) {
 
-                        JSONObject(
+                        /*
+                         * Ini bagian penting untuk error:
+                         *
+                         * Unexpected non-whitespace character
+                         *
+                         * Kita tampilkan response sebenarnya.
+                         */
+                        status.text =
                             """
-                            {
-                              "success": false,
-                              "message": "Response server bukan JSON valid.",
-                              "raw_response": ${jsonEscape(resultString)}
-                            }
+                            PAIRING GAGAL
+                            
+                            Response server bukan JSON valid.
+                            
+                            Error:
+                            ${e.message ?: "JSON parse error"}
+                            
+                            Response:
+                            ${cleanPreview(raw)}
                             """.trimIndent()
-                        )
+
+                        return@launch
                     }
 
                 /*
-                 * Ambil hasil dari JSON.
+                 * =================================================
+                 * HASIL JSON
+                 * =================================================
                  */
                 val success =
                     result.optBoolean(
@@ -286,71 +395,164 @@ class MainActivity : AppCompatActivity() {
                         false
                     )
 
+                /*
+                 * Beberapa endpoint mungkin menaruh
+                 * HTTP code di root.
+                 */
                 val httpCode =
                     result.optInt(
                         "http_code",
                         0
                     )
 
-                val message =
-                    result.optString(
-                        "message",
-                        "Response server tidak diketahui."
+                /*
+                 * Kalau http_code ada di data,
+                 * coba ambil juga.
+                 */
+                val data =
+                    result.optJSONObject(
+                        "data"
                     )
 
+                val dataHttpCode =
+                    data?.optInt(
+                        "http_code",
+                        0
+                    ) ?: 0
+
+                val finalHttpCode =
+                    if (
+                        httpCode > 0
+                    ) {
+                        httpCode
+                    } else {
+                        dataHttpCode
+                    }
+
+                /*
+                 * Message root.
+                 */
+                var message =
+                    result.optString(
+                        "message",
+                        ""
+                    )
+
+                /*
+                 * Kalau message kosong,
+                 * coba dari data.
+                 */
+                if (
+                    message.isBlank() &&
+                    data != null
+                ) {
+
+                    message =
+                        data.optString(
+                            "message",
+                            ""
+                        )
+                }
+
+                if (
+                    message.isBlank()
+                ) {
+
+                    message =
+                        "Response server tidak diketahui."
+                }
+
+                /*
+                 * =================================================
+                 * PAIRING BERHASIL
+                 * =================================================
+                 */
                 if (success) {
 
                     /*
-                     * Session token hasil pairing.
+                     * Session token.
                      */
                     val session =
-                        result.optString(
-                            "session_token",
-                            ""
+                        firstNonBlank(
+                            result.optString(
+                                "session_token",
+                                ""
+                            ),
+                            data?.optString(
+                                "session_token",
+                                ""
+                            )
                         )
-                            .takeIf {
-                                it.isNotBlank()
-                            }
 
                     /*
-                     * PC token hasil pairing.
+                     * PC token.
                      */
                     val pc =
-                        result.optString(
-                            "pc_token",
-                            ""
+                        firstNonBlank(
+                            result.optString(
+                                "pc_token",
+                                ""
+                            ),
+                            data?.optString(
+                                "pc_token",
+                                ""
+                            )
                         )
-                            .takeIf {
-                                it.isNotBlank()
-                            }
 
                     /*
-                     * Mode pairing.
+                     * Mode.
                      */
                     val mode =
-                        result.optString(
-                            "mode",
-                            ""
+                        firstNonBlank(
+                            result.optString(
+                                "mode",
+                                ""
+                            ),
+                            data?.optString(
+                                "mode",
+                                ""
+                            ),
+                            Config.MODE,
+                            "temporary"
                         )
-                            .takeIf {
-                                it.isNotBlank()
-                            }
-                            ?: Config.MODE
 
                     /*
-                     * Server bisa mengirim status
                      * agent_enabled.
                      *
                      * DEFAULT WAJIB FALSE.
                      */
                     val agentEnabled =
-                        result.optBoolean(
-                            "agent_enabled",
+                        if (
+                            result.has(
+                                "agent_enabled"
+                            )
+                        ) {
+
+                            result.optBoolean(
+                                "agent_enabled",
+                                false
+                            )
+
+                        } else if (
+                            data?.has(
+                                "agent_enabled"
+                            ) == true
+                        ) {
+
+                            data.optBoolean(
+                                "agent_enabled",
+                                false
+                            )
+
+                        } else {
+
                             false
-                        )
+                        }
 
                     /*
-                     * Simpan hasil pairing.
+                     * =================================================
+                     * SIMPAN SESSION
+                     * =================================================
                      */
                     storage.deviceId =
                         deviceId
@@ -362,27 +564,50 @@ class MainActivity : AppCompatActivity() {
                         Config.ENROLLMENT_CODE
 
                     storage.sessionToken =
-                        session
+                        session.ifBlank {
+                            null
+                        }
 
                     storage.pcToken =
-                        pc
+                        pc.ifBlank {
+                            null
+                        }
 
                     storage.mode =
                         mode
 
                     /*
-                     * Status agent mengikuti server.
+                     * Server adalah sumber kebenaran.
                      *
-                     * Pairing baru seharusnya false.
+                     * Pairing baru:
+                     * agent_enabled = false.
                      */
                     storage.agentEnabled =
                         agentEnabled
 
+                    /*
+                     * =================================================
+                     * UI
+                     * =================================================
+                     */
                     status.text =
-                        if (agentEnabled) {
-                            "Status: TERHUBUNG • AGENT AKTIF"
+                        if (
+                            agentEnabled
+                        ) {
+
+                            """
+                            Status: TERHUBUNG
+                            AGENT: AKTIF
+                            Mode: ${mode.uppercase()}
+                            """.trimIndent()
+
                         } else {
-                            "Status: TERHUBUNG • AGENT MATI"
+
+                            """
+                            Status: TERHUBUNG
+                            AGENT: MATI
+                            Mode: ${mode.uppercase()}
+                            """.trimIndent()
                         }
 
                     disconnect.visibility =
@@ -392,40 +617,71 @@ class MainActivity : AppCompatActivity() {
                         View.GONE
 
                     /*
-                     * Jalankan heartbeat service.
+                     * =================================================
+                     * HEARTBEAT SERVICE
+                     * =================================================
                      *
-                     * Service akan terus bertanya ke server
-                     * mengenai agent_enabled.
+                     * Service akan mengambil keputusan
+                     * agent_enabled dari server.
                      */
-                    ContextCompat
-                        .startForegroundService(
-                            this@MainActivity,
-                            Intent(
-                                this@MainActivity,
-                                HeartbeatService::class.java
-                            )
-                        )
+                    startHeartbeatService()
 
                 } else {
 
                     /*
-                     * Pairing gagal.
+                     * =================================================
+                     * PAIRING GAGAL
+                     * =================================================
                      */
-                    status.text =
-                        if (httpCode > 0) {
-                            "HTTP $httpCode - $message"
+                    storage.agentEnabled =
+                        false
+
+                    val errorText =
+                        if (
+                            finalHttpCode > 0
+                        ) {
+
+                            "HTTP $finalHttpCode\n$message"
+
                         } else {
+
                             message
                         }
+
+                    status.text =
+                        """
+                        PAIRING GAGAL
+                        
+                        $errorText
+                        """.trimIndent()
+
+                    disconnect.visibility =
+                        View.GONE
+
+                    connect.visibility =
+                        View.VISIBLE
                 }
 
             } catch (e: Exception) {
 
+                /*
+                 * Exception umum.
+                 */
+                storage.agentEnabled =
+                    false
+
                 status.text =
-                    "Gagal: ${
-                        e.message
-                            ?: e.javaClass.simpleName
-                    }"
+                    """
+                    KONEKSI GAGAL
+                    
+                    ${e.message ?: e.javaClass.simpleName}
+                    """.trimIndent()
+
+                disconnect.visibility =
+                    View.GONE
+
+                connect.visibility =
+                    View.VISIBLE
 
             } finally {
 
@@ -435,6 +691,152 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /*
+     * =========================================================
+     * DISCONNECT
+     * =========================================================
+     */
+    private fun disconnectAgent() {
+
+        /*
+         * Stop heartbeat.
+         */
+        stopService(
+            Intent(
+                this,
+                HeartbeatService::class.java
+            )
+        )
+
+        /*
+         * Hapus seluruh session lokal.
+         */
+        storage.clearAll()
+
+        /*
+         * Pastikan agent mati.
+         */
+        storage.agentEnabled =
+            false
+
+        /*
+         * UI.
+         */
+        status.text =
+            "Status: Terputus"
+
+        disconnect.visibility =
+            View.GONE
+
+        connect.visibility =
+            View.VISIBLE
+
+        connect.isEnabled =
+            true
+    }
+
+    /*
+     * =========================================================
+     * HEARTBEAT
+     * =========================================================
+     */
+    private fun startHeartbeatService() {
+
+        try {
+
+            ContextCompat.startForegroundService(
+                this,
+                Intent(
+                    this,
+                    HeartbeatService::class.java
+                )
+            )
+
+        } catch (e: Exception) {
+
+            status.text =
+                """
+                TERHUBUNG
+                AGENT: MATI
+                
+                Heartbeat gagal dimulai:
+                ${e.message ?: e.javaClass.simpleName}
+                """.trimIndent()
+        }
+    }
+
+    /*
+     * =========================================================
+     * NOTIFICATION PERMISSION
+     * =========================================================
+     */
+    private fun requestNotificationPermission() {
+
+        if (
+            android.os.Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(
+                    Manifest.permission.POST_NOTIFICATIONS
+                ),
+                11
+            )
+        }
+    }
+
+    /*
+     * =========================================================
+     * HELPER
+     * =========================================================
+     */
+
+    private fun firstNonBlank(
+        vararg values: String?
+    ): String {
+
+        for (value in values) {
+
+            if (
+                !value.isNullOrBlank()
+            ) {
+
+                return value
+            }
+        }
+
+        return ""
+    }
+
+    /*
+     * Ambil response maksimal 500 karakter
+     * supaya UI tidak penuh HTML.
+     */
+    private fun cleanPreview(
+        value: String
+    ): String {
+
+        return value
+            .replace(
+                Regex("\\s+"),
+                " "
+            )
+            .trim()
+            .take(500)
+    }
+
+    /*
+     * Escape JSON string.
+     *
+     * Dipertahankan sebagai helper apabila
+     * diperlukan oleh debugging lain.
+     */
     private fun jsonEscape(
         value: String
     ): String {

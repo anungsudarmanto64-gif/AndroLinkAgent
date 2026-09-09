@@ -29,9 +29,6 @@ object Config {
     var MODE: String = "temporary"
         private set
 
-    var JOB_ID: String = ""
-        private set
-
     @Volatile
     private var loaded = false
 
@@ -45,19 +42,19 @@ object Config {
 
             try {
 
-                val text = context.assets
-                    .open("androlink-agent.json")
-                    .bufferedReader()
-                    .use { it.readText() }
-
-                val json = JSONObject(text)
+                val json =
+                    context.assets
+                        .open("androlink-agent.json")
+                        .bufferedReader()
+                        .use {
+                            JSONObject(it.readText())
+                        }
 
                 BASE_URL =
                     json.optString(
                         "api_base",
                         BASE_URL
                     )
-                        .trim()
                         .trimEnd('/') + "/"
 
                 PAIR_ENDPOINT =
@@ -66,8 +63,6 @@ object Config {
                         "pair_endpoint",
                         "pair_device.php"
                     )
-                        .trim()
-                        .trimStart('/')
 
                 HEARTBEAT_ENDPOINT =
                     BASE_URL +
@@ -75,8 +70,6 @@ object Config {
                         "heartbeat_endpoint",
                         "heartbeat.php"
                     )
-                        .trim()
-                        .trimStart('/')
 
                 DEVICE_ID =
                     json.optString(
@@ -94,8 +87,7 @@ object Config {
                     json.optString(
                         "enrollment_code",
                         ""
-                    )
-                        .trim()
+                    ).trim()
                         .uppercase()
 
                 MODE =
@@ -104,28 +96,14 @@ object Config {
                         "temporary"
                     ).trim()
 
-                JOB_ID =
-                    json.optString(
-                        "job_id",
-                        ""
-                    ).trim()
+            } catch (_: Exception) {
 
-            } catch (e: Exception) {
-
-                DEVICE_ID = ""
-                DEVICE_TOKEN = ""
-                ENROLLMENT_CODE = ""
-
+                /*
+                 * Gunakan default.
+                 */
             }
 
             loaded = true
         }
-    }
-
-    fun isEnrolled(): Boolean {
-
-        return DEVICE_ID.isNotBlank() &&
-                DEVICE_TOKEN.isNotBlank() &&
-                ENROLLMENT_CODE.isNotBlank()
     }
 }

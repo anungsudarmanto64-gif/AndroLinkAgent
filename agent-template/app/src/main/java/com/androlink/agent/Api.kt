@@ -25,19 +25,36 @@ object Api {
         return try {
 
             connection =
-                URL(url)
-                    .openConnection() as HttpURLConnection
+                URL(url).openConnection() as HttpURLConnection
 
+            // =====================================================
+            // METHOD
+            // =====================================================
             connection.requestMethod = "POST"
 
+            // =====================================================
+            // TIMEOUT
+            // =====================================================
             connection.connectTimeout = 15000
             connection.readTimeout = 20000
 
+            connection.doInput = true
             connection.doOutput = true
 
+            // Jangan gunakan cache
+            connection.useCaches = false
+
+            // Tutup koneksi setelah request selesai
             connection.setRequestProperty(
-                "Content-Type",
-                "application/x-www-form-urlencoded; charset=UTF-8"
+                "Connection",
+                "close"
+            )
+
+            // User-Agent normal agar request Android tidak dianggap
+            // request aneh oleh server/WAF
+            connection.setRequestProperty(
+                "User-Agent",
+                "AndroLinkAgent/1.0 Android"
             )
 
             connection.setRequestProperty(
@@ -45,31 +62,55 @@ object Api {
                 "application/json"
             )
 
+            connection.setRequestProperty(
+                "Content-Type",
+                "application/x-www-form-urlencoded; charset=UTF-8"
+            )
+
+            // =====================================================
+            // BUILD POST BODY
+            // =====================================================
             val body =
-                fields.entries.joinToString("&") {
+                fields.entries.joinToString("&") { entry ->
 
                     URLEncoder.encode(
-                        it.key,
+                        entry.key,
                         "UTF-8"
                     ) +
                     "=" +
                     URLEncoder.encode(
-                        it.value,
+                        entry.value,
                         "UTF-8"
                     )
                 }
 
-            connection.outputStream.use {
-                it.write(
-                    body.toByteArray(
-                        Charsets.UTF_8
-                    )
-                )
+            val bodyBytes =
+                body.toByteArray(Charsets.UTF_8)
+
+            // Penting:
+            // kirim ukuran body secara eksplisit
+            connection.setFixedLengthStreamingMode(
+                bodyBytes.size
+            )
+
+            // =====================================================
+            // SEND POST
+            // =====================================================
+            connection.outputStream.use { output ->
+
+                output.write(bodyBytes)
+                output.flush()
             }
 
+            // =====================================================
+            // RESPONSE CODE
+            // =====================================================
             val httpCode =
                 connection.responseCode
 
+            // =====================================================
+            // RESPONSE STREAM
+            // =====================================================
             val stream =
                 if (httpCode in 200..399) {
                     connection.inputStream
@@ -85,14 +126,17 @@ object Api {
                             stream,
                             Charsets.UTF_8
                         )
-                    ).use {
-                        it.readText()
+                    ).use { reader ->
+                        reader.readText()
                     }
 
                 } else {
                     ""
                 }
 
+            // =====================================================
+            // PARSE JSON
+            // =====================================================
             val json =
                 try {
 
@@ -109,6 +153,7 @@ object Api {
                     }
 
                 } catch (_: Exception) {
+
                     null
                 }
 
@@ -134,6 +179,10 @@ object Api {
         }
     }
 
+    // =============================================================
+    // PAIR DEVICE
+    // =============================================================
+
     fun pair(
         deviceId: String,
         deviceToken: String,
@@ -149,8 +198,7 @@ object Api {
             )
 
         if (
-            enrollmentCode
-                .isNotBlank()
+            enrollmentCode.isNotBlank()
         ) {
 
             fields[
@@ -164,6 +212,10 @@ object Api {
                 fields
             )
 
+        // =========================================================
+        // JSON RESPONSE
+        // =========================================================
+
         if (result.json != null) {
 
             result.json.put(
@@ -171,27 +223,18 @@ object Api {
                 result.httpCode
             )
 
-            if (
+            result.json.put(
+                "raw_response",
                 result.body
-                    .isNotBlank()
-            ) {
-
-                result.json.put(
-                    "raw_response",
-                    result.body
-                )
-            }
+            )
 
             return result.json
         }
 
-        /*
-         * Jangan lagi membuat:
-         *
-         * HTTP 200 - HTTP 200
-         *
-         * sebagai response palsu.
-         */
+        // =========================================================
+        // NON JSON RESPONSE
+        // =========================================================
+
         return JSONObject().apply {
 
             put(
@@ -207,8 +250,7 @@ object Api {
             put(
                 "message",
                 if (
-                    result.body
-                        .isNotBlank()
+                    result.body.isNotBlank()
                 ) {
                     result.body
                 } else {
@@ -223,6 +265,10 @@ object Api {
         }
     }
 
+    // =============================================================
+    // HEARTBEAT
+    // =============================================================
+
     fun heartbeat(
         deviceId: String,
         deviceToken: String,
@@ -236,8 +282,7 @@ object Api {
             )
 
         if (
-            !sessionToken
-                .isNullOrBlank()
+            !sessionToken.isNullOrBlank()
         ) {
 
             fields[
@@ -251,6 +296,10 @@ object Api {
                 fields
             )
 
+        // =========================================================
+        // JSON RESPONSE
+        // =========================================================
+
         if (result.json != null) {
 
             result.json.put(
@@ -258,8 +307,17 @@ object Api {
                 result.httpCode
             )
 
+            result.json.put(
+                "raw_response",
+                result.body
+            )
+
             return result.json
         }
+
+        // =========================================================
+        // NON JSON RESPONSE
+        // =========================================================
 
         return JSONObject().apply {
 
@@ -276,8 +334,7 @@ object Api {
             put(
                 "message",
                 if (
-                    result.body
-                        .isNotBlank()
+                    result.body.isNotBlank()
                 ) {
                     result.body
                 } else {

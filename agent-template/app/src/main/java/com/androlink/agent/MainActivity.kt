@@ -23,33 +23,71 @@ class MainActivity : AppCompatActivity() {
     private lateinit var disconnect: Button
     private lateinit var storage: Storage
 
-    override fun onCreate(savedInstanceState: Bundle?) {
+    override fun onCreate(
+        savedInstanceState: Bundle?
+    ) {
         super.onCreate(savedInstanceState)
 
-        setContentView(R.layout.activity_main)
+        setContentView(
+            R.layout.activity_main
+        )
 
         Config.load(this)
 
-        storage = Storage(this)
+        storage =
+            Storage(this)
 
-        status = findViewById(R.id.tvStatus)
-        connect = findViewById(R.id.btnConnect)
-        disconnect = findViewById(R.id.btnDisconnect)
+        status =
+            findViewById(
+                R.id.tvStatus
+            )
 
-        findViewById<TextView>(R.id.tvDevice).text =
+        connect =
+            findViewById(
+                R.id.btnConnect
+            )
+
+        disconnect =
+            findViewById(
+                R.id.btnDisconnect
+            )
+
+        findViewById<TextView>(
+            R.id.tvDevice
+        ).text =
             "Perangkat: ${DeviceInfo.name()}"
 
-        findViewById<TextView>(R.id.tvAndroid).text =
+        findViewById<TextView>(
+            R.id.tvAndroid
+        ).text =
             "Android: ${DeviceInfo.android()}"
 
-        connect.text = "Hubungkan Agent"
+        connect.text =
+            "Hubungkan Agent"
 
         connect.setOnClickListener {
             pair()
         }
 
         disconnect.setOnClickListener {
-            disconnectAgent()
+
+            storage.clear()
+
+            stopService(
+                Intent(
+                    this,
+                    HeartbeatService::class.java
+                )
+            )
+
+            status.text =
+                "Status: Terputus"
+
+            disconnect.visibility =
+                View.GONE
+
+            connect.visibility =
+                View.VISIBLE
         }
 
         if (
@@ -59,23 +97,27 @@ class MainActivity : AppCompatActivity() {
                 Manifest.permission.POST_NOTIFICATIONS
             ) != PackageManager.PERMISSION_GRANTED
         ) {
+
             ActivityCompat.requestPermissions(
                 this,
-                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                arrayOf(
+                    Manifest.permission.POST_NOTIFICATIONS
+                ),
                 11
             )
         }
 
         /*
-         * Jangan langsung melakukan pairing berulang-ulang
-         * kalau konfigurasi APK kosong.
+         * Kalau APK sudah mempunyai
+         * konfigurasi enrollment,
+         * langsung coba pairing.
          */
         if (
             Config.DEVICE_ID.isNotBlank() &&
             Config.DEVICE_TOKEN.isNotBlank()
         ) {
 
-            status.text = "Status: Siap menghubungkan"
+            pair()
 
         } else {
 
@@ -86,99 +128,142 @@ class MainActivity : AppCompatActivity() {
 
     private fun pair() {
 
-        if (connect.isEnabled.not()) {
-            return
-        }
+        connect.isEnabled =
+            false
 
-        connect.isEnabled = false
+        status.text =
+            "Status: Menghubungkan ke server..."
 
-        disconnect.visibility = View.GONE
-
-        status.text = "Status: Menghubungkan..."
-
-        CoroutineScope(Dispatchers.Main).launch {
+        CoroutineScope(
+            Dispatchers.Main
+        ).launch {
 
             try {
 
-                val deviceId =
-                    if (Config.DEVICE_ID.isNotBlank()) {
-                        Config.DEVICE_ID.trim()
-                    } else {
-                        DeviceInfo.id(this@MainActivity).trim()
-                    }
+                /*
+                 * Token dari generator.
+                 *
+                 * Kalau tidak ada,
+                 * buat token lokal.
+                 */
+                val token =
+                    if (
+                        Config.DEVICE_TOKEN
+                            .isNotBlank()
+                    ) {
 
-                val deviceToken =
-                    if (Config.DEVICE_TOKEN.isNotBlank()) {
-                        Config.DEVICE_TOKEN.trim()
+                        Config.DEVICE_TOKEN
+
                     } else {
+
                         storage.deviceToken
-                            ?.trim()
-                            ?.takeIf { it.isNotEmpty() }
-                            ?: UUID.randomUUID()
+                            ?: UUID
+                                .randomUUID()
                                 .toString()
-                                .replace("-", "")
+                                .replace(
+                                    "-",
+                                    ""
+                                )
                                 .also {
-                                    storage.deviceToken = it
+                                    storage.deviceToken =
+                                        it
                                 }
                     }
 
-                if (deviceId.isBlank()) {
-
-                    status.text =
-                        "Status: Device ID kosong"
-
-                    return@launch
-                }
-
-                if (deviceToken.isBlank()) {
-
-                    status.text =
-                        "Status: Device Token kosong"
-
-                    return@launch
-                }
-
                 /*
-                 * Simpan token sebelum request.
+                 * Device ID dari generator.
                  */
-                storage.deviceToken = deviceToken
+                val deviceId =
+                    if (
+                        Config.DEVICE_ID
+                            .isNotBlank()
+                    ) {
 
-                val result =
-                    withContext(Dispatchers.IO) {
-                        Api.pair(
-                            deviceId = deviceId,
-                            deviceToken = deviceToken
+                        Config.DEVICE_ID
+
+                    } else {
+
+                        DeviceInfo.id(
+                            this@MainActivity
                         )
                     }
 
-                /*
-                 * DEBUG RESPONSE
-                 *
-                 * Kita sekarang tahu:
-                 * - HTTP code
-                 * - JSON
-                 * - response mentah
-                 */
+                storage.deviceToken =
+                    token
 
-                if (result.success) {
+                status.text =
+                    "Status: Mengirim data perangkat..."
 
-                    val json = result.json
+                val result =
+                    withContext(
+                        Dispatchers.IO
+                    ) {
+
+                        Api.pair(
+                            deviceId =
+                                deviceId,
+                            deviceToken =
+                                token,
+                            enrollmentCode =
+                                Config.ENROLLMENT_CODE,
+                            deviceName =
+                                DeviceInfo.name()
+                        )
+                    }
+
+                val success =
+                    result.optBoolean(
+                        "success",
+                        false
+                    )
+
+                val httpCode =
+                    result.optInt(
+                        "http_code",
+                        0
+                    )
+
+                val message =
+                    result.optString(
+                        "message",
+                        "Response server tidak diketahui."
+                    )
+
+                if (success) {
+
+                    val session =
+                        result.optString(
+                            "session_token"
+                        )
+                            .takeIf {
+                                it.isNotBlank()
+                            }
+
+                    val pc =
+                        result.optString(
+                            "pc_token"
+                        )
+                            .takeIf {
+                                it.isNotBlank()
+                            }
+
+                    val mode =
+                        result.optString(
+                            "mode"
+                        )
+                            .takeIf {
+                                it.isNotBlank()
+                            }
+                            ?: Config.MODE
 
                     storage.sessionToken =
-                        json
-                            ?.optString("session_token", "")
-                            ?.takeIf { it.isNotBlank() }
+                        session
 
                     storage.pcToken =
-                        json
-                            ?.optString("pc_token", "")
-                            ?.takeIf { it.isNotBlank() }
+                        pc
 
                     storage.mode =
-                        json
-                            ?.optString("mode", "")
-                            ?.takeIf { it.isNotBlank() }
-                            ?: Config.MODE
+                        mode
 
                     status.text =
                         "Status: TERHUBUNG"
@@ -189,62 +274,38 @@ class MainActivity : AppCompatActivity() {
                     connect.visibility =
                         View.GONE
 
-                    ContextCompat.startForegroundService(
-                        this@MainActivity,
-                        Intent(
+                    ContextCompat
+                        .startForegroundService(
                             this@MainActivity,
-                            HeartbeatService::class.java
+                            Intent(
+                                this@MainActivity,
+                                HeartbeatService::class.java
+                            )
                         )
-                    )
 
                 } else {
 
-                    val detail =
-                        result.message
-
+                    /*
+                     * Sekarang error asli server
+                     * akan kelihatan.
+                     */
                     status.text =
-                        if (result.httpCode > 0) {
-                            "Status: HTTP ${result.httpCode} - $detail"
-                        } else {
-                            "Status: $detail"
-                        }
+                        "HTTP $httpCode - $message"
                 }
 
             } catch (e: Exception) {
 
                 status.text =
-                    "Status: Error - ${
-                        e.message ?: e.javaClass.simpleName
+                    "Gagal: ${
+                        e.message
+                            ?: e.javaClass.simpleName
                     }"
 
             } finally {
 
-                connect.isEnabled = true
+                connect.isEnabled =
+                    true
             }
         }
-    }
-
-    private fun disconnectAgent() {
-
-        storage.clear()
-
-        stopService(
-            Intent(
-                this,
-                HeartbeatService::class.java
-            )
-        )
-
-        status.text =
-            "Status: Terputus"
-
-        disconnect.visibility =
-            View.GONE
-
-        connect.visibility =
-            View.VISIBLE
-
-        connect.isEnabled =
-            true
     }
 }

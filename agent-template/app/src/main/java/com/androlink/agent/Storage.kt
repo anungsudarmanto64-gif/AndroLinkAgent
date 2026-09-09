@@ -2,43 +2,50 @@ package com.androlink.agent
 
 import android.content.Context
 
-class Storage(context: Context) {
+class Storage(c: Context) {
 
-    private val prefs = context.getSharedPreferences(
+    private val p = c.getSharedPreferences(
         "androlink_agent",
         Context.MODE_PRIVATE
     )
 
     var deviceToken: String?
-        get() = prefs.getString("device_token", null)
-        set(value) {
-            prefs.edit().putString("device_token", value).apply()
+        get() = p.getString("device_token", null)
+        set(v) {
+            p.edit()
+                .putString("device_token", v)
+                .apply()
         }
 
-    var deviceId: String?
-        get() = prefs.getString("device_id", null)
-        set(value) {
-            prefs.edit().putString("device_id", value).apply()
+    var sessionToken: String?
+        get() = p.getString("session_token", null)
+        set(v) {
+            p.edit()
+                .putString("session_token", v)
+                .apply()
         }
 
-    var pairingCode: String?
-        get() = prefs.getString("pairing_code", null)
-        set(value) {
-            prefs.edit().putString("pairing_code", value).apply()
+    var pcToken: String?
+        get() = p.getString("pc_token", null)
+        set(v) {
+            p.edit()
+                .putString("pc_token", v)
+                .apply()
         }
 
-    var connected: Boolean
-        get() = prefs.getBoolean("connected", false)
-        set(value) {
-            prefs.edit().putBoolean("connected", value).apply()
+    var mode: String?
+        get() = p.getString("mode", null)
+        set(v) {
+            p.edit()
+                .putString("mode", v)
+                .apply()
         }
 
-    fun clearConnection() {
-        prefs.edit()
-            .remove("device_token")
-            .remove("device_id")
-            .remove("pairing_code")
-            .putBoolean("connected", false)
+    fun clear() {
+        p.edit()
+            .remove("session_token")
+            .remove("pc_token")
+            .remove("mode")
             .apply()
     }
 }

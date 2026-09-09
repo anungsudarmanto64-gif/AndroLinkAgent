@@ -17,11 +17,14 @@ object Api {
         params: Map<String, String>
     ): String {
 
-        val url = URL(
-            Config.API_BASE.trimEnd('/') +
-                    "/" +
-                    endpoint.trimStart('/')
-        )
+        /*
+         * Config.PAIR_ENDPOINT dan Config.HEARTBEAT_ENDPOINT
+         * sudah berisi URL lengkap.
+         *
+         * Contoh:
+         * https://androlink.xo.je/api/pair_device.php
+         */
+        val url = URL(endpoint)
 
         val body = params.entries.joinToString("&") {
             "${encode(it.key)}=${encode(it.value)}"
@@ -33,8 +36,8 @@ object Api {
 
         try {
 
-            connection = url.openConnection()
-                    as HttpURLConnection
+            connection =
+                url.openConnection() as HttpURLConnection
 
             connection.requestMethod = "POST"
 
@@ -94,7 +97,8 @@ object Api {
                 return """
                     {
                       "success": false,
-                      "message": "Server tidak mengirim response."
+                      "message": "Server tidak mengirim response.",
+                      "http_code": $responseCode
                     }
                 """.trimIndent()
             }
@@ -123,8 +127,7 @@ object Api {
 
             /*
              * Jika server mengembalikan HTML,
-             * berarti kemungkinan ada protection/challenge
-             * dari hosting, bukan response API JSON.
+             * berarti bukan response JSON API.
              */
             if (
                 result.contains("<html", true) ||
@@ -153,9 +156,11 @@ object Api {
             }
 
             /*
-             * Jangan melakukan parsing JSON di sini.
-             * MainActivity / HeartbeatService yang memproses
-             * response JSON.
+             * JSON dikembalikan apa adanya.
+             *
+             * Parsing dilakukan oleh:
+             * MainActivity
+             * HeartbeatService
              */
             return result
 

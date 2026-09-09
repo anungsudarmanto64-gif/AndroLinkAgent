@@ -11,143 +11,266 @@ import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 
 class HeartbeatService : Service() {
 
-    private lateinit var storage: Storage
+    companion object {
+
+        private const val CHANNEL_ID = "androlink_agent"
+        private const val NOTIFICATION_ID = 1001
+
+        private const val HEARTBEAT_INTERVAL = 30_000L
+    }
+
+    private val serviceJob = SupervisorJob()
+
+    private val serviceScope =
+        CoroutineScope(
+            Dispatchers.IO + serviceJob
+        )
 
     private var heartbeatJob: Job? = null
 
-    override fun onCreate() {
+    private lateinit var storage: Storage
 
+    override fun onCreate() {
         super.onCreate()
 
-        Config.load(this)
-
-        storage =
-            Storage(this)
+        storage = Storage(this)
 
         createNotificationChannel()
 
         startForeground(
-            1001,
-            createNotification()
+            NOTIFICATION_ID,
+            buildNotification(
+                active = false,
+                message = "Menunggu aktivasi pemilik..."
+            )
         )
 
-        heartbeatJob =
-            CoroutineScope(
-                Dispatchers.IO
-            ).launch {
+        startHeartbeat()
+    }
 
-                while (isActive) {
+    private fun startHeartbeat() {
 
-                    sendHeartbeat()
+        heartbeatJob?.cancel()
 
-                    delay(30_000)
-                }
+        heartbeatJob = serviceScope.launch {
+
+            /*
+             * Beri sedikit waktu setelah service dimulai.
+             */
+            delay(1000)
+
+            while (isActive) {
+
+                sendHeartbeat()
+
+                delay(HEARTBEAT_INTERVAL)
             }
+        }
     }
 
     private suspend fun sendHeartbeat() {
 
-        val token =
-            storage.deviceToken
+        val deviceId =
+            storage.deviceId
+                ?: Config.DEVICE_ID
 
+        val deviceToken =
+            storage.deviceToken
+                ?: Config.DEVICE_TOKEN
+
+        val sessionToken =
+            storage.sessionToken
+
+        /*
+         * Belum pairing.
+         */
         if (
-            token.isNullOrBlank()
+            deviceId.isBlank() ||
+            deviceToken.isBlank() ||
+            sessionToken.isNullOrBlank()
         ) {
+
+            updateNotification(
+                active = false,
+                message = "Belum terhubung ke server"
+            )
+
             return
         }
 
-        val deviceId =
-            if (
-                Config.DEVICE_ID
-                    .isNotBlank()
-            ) {
-
-                Config.DEVICE_ID
-
-            } else {
-
-                DeviceInfo.id(this)
-            }
-
         try {
 
-            val result =
+            val response =
                 Api.heartbeat(
-                    deviceId =
-                        deviceId,
-                    deviceToken =
-                        token,
-                    sessionToken =
-                        storage.sessionToken
+                    deviceId = deviceId,
+                    deviceToken = deviceToken,
+                    sessionToken = sessionToken
                 )
 
-            if (
-                result.optBoolean(
-                    "success",
-                    false
-                )
-            ) {
+            processHeartbeatResponse(response)
 
-                result
-                    .optString(
-                        "session_token"
-                    )
-                    .takeIf {
-                        it.isNotBlank()
-                    }
-                    ?.let {
-                        storage.sessionToken =
-                            it
-                    }
-            }
+        } catch (e: Exception) {
 
-        } catch (_: Exception) {
-            /*
-             * Heartbeat gagal tidak
-             * menghentikan service.
-             */
+            updateNotification(
+                active = false,
+                message = "Koneksi server gagal"
+            )
         }
     }
 
-    private fun createNotification(): Notification {
+    private fun processHeartbeatResponse(
+        response: String
+    ) {
 
-        return NotificationCompat
-            .Builder(
-                this,
-                "androlink_agent"
+        try {
+
+            val json =
+                JSONObject(response)
+
+            val success =
+                json.optBoolean(
+                    "success",
+                    false
+                )
+
+            /*
+             * Server tidak menerima heartbeat.
+             */
+            if (!success) {
+
+                /*
+                 * Jangan pernah menganggap Agent aktif
+                 * jika server tidak memberikan izin.
+                 */
+                storage.agentEnabled = false
+
+                updateNotification(
+                    active = false,
+                    message = json.optString(
+                        "message",
+                        "Server menolak heartbeat"
+                    )
+                )
+
+                return
+            }
+
+            /*
+             * INI BAGIAN PALING PENTING.
+             *
+             * Server adalah sumber kebenaran.
+             *
+             * false = Agent MATI
+             * true  = Agent AKTIF
+             */
+            val agentEnabled =
+                json.optBoolean(
+                    "agent_enabled",
+                    false
+                )
+
+            storage.agentEnabled =
+                agentEnabled
+
+            if (agentEnabled) {
+
+                updateNotification(
+                    active = true,
+                    message = "Agent aktif • Server mengizinkan"
+                )
+
+            } else {
+
+                updateNotification(
+                    active = false,
+                    message = "Agent mati • Menunggu aktivasi pemilik"
+                )
+            }
+
+        } catch (e: Exception) {
+
+            /*
+             * Jika response bukan JSON,
+             * keamanan default = Agent MATI.
+             */
+            storage.agentEnabled = false
+
+            updateNotification(
+                active = false,
+                message = "Response server tidak valid"
             )
-            .setContentTitle(
-                "AndroLink Agent"
+        }
+    }
+
+    private fun updateNotification(
+        active: Boolean,
+        message: String
+    ) {
+
+        val manager =
+            getSystemService(
+                NotificationManager::class.java
             )
-            .setContentText(
-                "Agent aktif dan terhubung"
+
+        manager.notify(
+            NOTIFICATION_ID,
+            buildNotification(
+                active = active,
+                message = message
             )
+        )
+    }
+
+    private fun buildNotification(
+        active: Boolean,
+        message: String
+    ): Notification {
+
+        val title =
+            if (active) {
+                "AnDroid Link • AGENT AKTIF"
+            } else {
+                "AnDroid Link • AGENT MATI"
+            }
+
+        return NotificationCompat.Builder(
+            this,
+            CHANNEL_ID
+        )
             .setSmallIcon(
-                android.R.drawable.stat_sys_upload
+                android.R.drawable.stat_sys_data_sync
             )
+            .setContentTitle(title)
+            .setContentText(message)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setPriority(
+                NotificationCompat.PRIORITY_LOW
+            )
             .build()
     }
 
     private fun createNotificationChannel() {
 
-        if (
-            Build.VERSION.SDK_INT >=
-            Build.VERSION_CODES.O
-        ) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
 
             val channel =
                 NotificationChannel(
-                    "androlink_agent",
-                    "AndroLink Agent",
+                    CHANNEL_ID,
+                    "AnDroid Link Agent",
                     NotificationManager.IMPORTANCE_LOW
                 )
+
+            channel.description =
+                "Status koneksi AnDroid Link Agent"
 
             val manager =
                 getSystemService(
@@ -160,11 +283,24 @@ class HeartbeatService : Service() {
         }
     }
 
+    override fun onStartCommand(
+        intent: Intent?,
+        flags: Int,
+        startId: Int
+    ): Int {
+
+        /*
+         * Jika service dihentikan Android,
+         * minta sistem menjalankannya kembali.
+         */
+        return START_STICKY
+    }
+
     override fun onDestroy() {
 
         heartbeatJob?.cancel()
 
-        heartbeatJob = null
+        serviceJob.cancel()
 
         super.onDestroy()
     }
@@ -172,6 +308,7 @@ class HeartbeatService : Service() {
     override fun onBind(
         intent: Intent?
     ): IBinder? {
+
         return null
     }
 }

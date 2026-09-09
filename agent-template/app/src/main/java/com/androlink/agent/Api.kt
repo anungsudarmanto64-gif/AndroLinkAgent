@@ -1,23 +1,30 @@
 package com.androlink.agent
 
 import org.json.JSONObject
-import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 
 object Api {
 
-    /**
-     * POST form-urlencoded ke server dan membaca response JSON.
-     *
-     * Perbaikan:
-     * - Menangani HTTP 2xx / 4xx / 5xx
-     * - Membaca errorStream ketika server mengembalikan error
-     * - Tidak langsung crash ketika response bukan JSON
-     * - Memberikan informasi HTTP status untuk debugging
-     * - Menutup connection dan output stream dengan benar
-     */
+    private fun readResponse(
+        connection: HttpURLConnection
+    ): String {
+
+        val stream =
+            if (connection.responseCode in 200..299) {
+                connection.inputStream
+            } else {
+                connection.errorStream
+            }
+
+        return stream
+            ?.bufferedReader()
+            ?.use { it.readText() }
+            ?.trim()
+            ?: ""
+    }
+
     fun post(
         url: String,
         fields: Map<String, String>
@@ -26,11 +33,16 @@ object Api {
         var connection: HttpURLConnection? = null
 
         try {
-            connection = URL(url).openConnection() as HttpURLConnection
+
+            connection =
+                URL(url).openConnection()
+                    as HttpURLConnection
 
             connection.requestMethod = "POST"
+
             connection.connectTimeout = 15000
             connection.readTimeout = 20000
+
             connection.doInput = true
             connection.doOutput = true
             connection.useCaches = false
@@ -46,111 +58,125 @@ object Api {
             )
 
             connection.setRequestProperty(
-                "User-Agent",
-                "AndroLink-Agent/1.0 Android"
+                "Cache-Control",
+                "no-cache"
             )
 
-            val body = fields.entries.joinToString("&") { entry ->
-                URLEncoder.encode(entry.key, "UTF-8") +
+            connection.setRequestProperty(
+                "User-Agent",
+                "AndroLink-Agent/1.0"
+            )
+
+            val body =
+                fields.entries.joinToString("&") { entry ->
+
+                    URLEncoder.encode(
+                        entry.key,
+                        "UTF-8"
+                    ) +
                     "=" +
-                    URLEncoder.encode(entry.value, "UTF-8")
-            }
+                    URLEncoder.encode(
+                        entry.value,
+                        "UTF-8"
+                    )
+                }
 
             connection.outputStream.use { output ->
-                output.write(body.toByteArray(Charsets.UTF_8))
+
+                output.write(
+                    body.toByteArray(
+                        Charsets.UTF_8
+                    )
+                )
+
                 output.flush()
             }
 
-            val responseCode = connection.responseCode
+            val httpCode =
+                connection.responseCode
 
-            val stream = if (responseCode in 200..299) {
-                connection.inputStream
-            } else {
-                connection.errorStream
-            }
+            val response =
+                readResponse(connection)
 
-            val responseText = stream?.bufferedReader()?.use {
-                it.readText()
-            }?.trim().orEmpty()
+            if (response.isBlank()) {
 
-            if (responseText.isBlank()) {
                 return JSONObject().apply {
-                    put("success", false)
-                    put("message", "Server tidak mengembalikan response.")
-                    put("http_code", responseCode)
+
+                    put(
+                        "success",
+                        false
+                    )
+
+                    put(
+                        "message",
+                        "Server tidak mengembalikan response."
+                    )
+
+                    put(
+                        "http_code",
+                        httpCode
+                    )
                 }
             }
 
             return try {
-                JSONObject(responseText)
+
+                JSONObject(response)
+
             } catch (e: Exception) {
 
                 JSONObject().apply {
-                    put("success", false)
+
+                    put(
+                        "success",
+                        false
+                    )
+
                     put(
                         "message",
-                        "Response server bukan JSON."
+                        "Server mengembalikan response bukan JSON."
                     )
-                    put("http_code", responseCode)
 
-                    /*
-                     * Simpan sebagian response untuk debugging.
-                     * Jangan terlalu panjang supaya tidak memenuhi UI/log.
-                     */
                     put(
-                        "response",
-                        responseText.take(500)
+                        "http_code",
+                        httpCode
+                    )
+
+                    put(
+                        "raw_response",
+                        response.take(1000)
                     )
                 }
-            }
-
-        } catch (e: IOException) {
-
-            return JSONObject().apply {
-                put("success", false)
-                put(
-                    "message",
-                    "Gagal koneksi ke server: ${
-                        e.message ?: "Network error"
-                    }"
-                )
-                put("error", "NETWORK_ERROR")
             }
 
         } catch (e: Exception) {
 
             return JSONObject().apply {
-                put("success", false)
+
+                put(
+                    "success",
+                    false
+                )
+
                 put(
                     "message",
-                    e.message ?: "Terjadi kesalahan."
+                    "Gagal koneksi: ${
+                        e.message ?: "Network error"
+                    }"
                 )
-                put("error", "CLIENT_ERROR")
+
+                put(
+                    "error",
+                    "NETWORK_ERROR"
+                )
             }
 
         } finally {
+
             connection?.disconnect()
         }
     }
 
-
-    /**
-     * ============================================================
-     * PAIR DEVICE
-     * ============================================================
-     *
-     * Perbaikan utama:
-     *
-     * Sebelumnya hanya:
-     * - device_id
-     * - device_token
-     *
-     * Sekarang juga mengirim:
-     * - enrollment_code
-     *
-     * sehingga APK hasil generate dapat melakukan automatic
-     * enrollment ke server.
-     */
     fun pair(
         id: String,
         token: String,
@@ -167,29 +193,22 @@ object Api {
         )
     }
 
-
-    /**
-     * ============================================================
-     * HEARTBEAT
-     * ============================================================
-     *
-     * Mengirim status perangkat ke server.
-     *
-     * session_token hanya dikirim jika sudah tersedia.
-     */
     fun heartbeat(
         id: String,
         token: String,
         session: String?
     ): JSONObject {
 
-        val fields = mutableMapOf(
-            "device_id" to id,
-            "device_token" to token
-        )
+        val fields =
+            mutableMapOf(
+                "device_id" to id,
+                "device_token" to token
+            )
 
         if (!session.isNullOrBlank()) {
-            fields["session_token"] = session
+
+            fields["session_token"] =
+                session
         }
 
         return post(

@@ -14,6 +14,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.util.UUID
 
 class MainActivity : AppCompatActivity() {
@@ -71,14 +72,29 @@ class MainActivity : AppCompatActivity() {
 
         disconnect.setOnClickListener {
 
-            storage.clear()
-
+            /*
+             * Hentikan service terlebih dahulu.
+             */
             stopService(
                 Intent(
                     this,
                     HeartbeatService::class.java
                 )
             )
+
+            /*
+             * Hapus session pairing.
+             *
+             * clearAll() digunakan karena
+             * tombol disconnect berarti
+             * memutus seluruh data pairing lokal.
+             */
+            storage.clearAll()
+
+            /*
+             * Status lokal selalu MATI setelah disconnect.
+             */
+            storage.agentEnabled = false
 
             status.text =
                 "Status: Terputus"
@@ -90,6 +106,9 @@ class MainActivity : AppCompatActivity() {
                 View.VISIBLE
         }
 
+        /*
+         * Permission notifikasi Android 13+.
+         */
         if (
             android.os.Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(
@@ -108,13 +127,13 @@ class MainActivity : AppCompatActivity() {
         }
 
         /*
-         * Kalau APK sudah mempunyai
-         * konfigurasi enrollment,
-         * langsung coba pairing.
+         * Kalau APK memiliki konfigurasi
+         * enrollment, coba pairing otomatis.
          */
         if (
             Config.DEVICE_ID.isNotBlank() &&
-            Config.DEVICE_TOKEN.isNotBlank()
+            Config.DEVICE_TOKEN.isNotBlank() &&
+            Config.ENROLLMENT_CODE.isNotBlank()
         ) {
 
             pair()
@@ -127,6 +146,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun pair() {
+
+        if (
+            Config.ENROLLMENT_CODE.isBlank()
+        ) {
+
+            status.text =
+                "Status: Kode enrollment belum tersedia"
+
+            return
+        }
 
         connect.isEnabled =
             false
@@ -141,10 +170,10 @@ class MainActivity : AppCompatActivity() {
             try {
 
                 /*
-                 * Token dari generator.
+                 * Token dari konfigurasi generator.
                  *
-                 * Kalau tidak ada,
-                 * buat token lokal.
+                 * Jika tidak tersedia,
+                 * gunakan token lokal.
                  */
                 val token =
                     if (
@@ -171,7 +200,9 @@ class MainActivity : AppCompatActivity() {
                     }
 
                 /*
-                 * Device ID dari generator.
+                 * Device ID dari konfigurasi generator.
+                 *
+                 * Jika kosong, gunakan ANDROID_ID.
                  */
                 val deviceId =
                     if (
@@ -191,10 +222,19 @@ class MainActivity : AppCompatActivity() {
                 storage.deviceToken =
                     token
 
+                storage.deviceId =
+                    deviceId
+
+                storage.enrollmentCode =
+                    Config.ENROLLMENT_CODE
+
                 status.text =
                     "Status: Mengirim data perangkat..."
 
-                val result =
+                /*
+                 * Request pairing dilakukan di IO thread.
+                 */
+                val resultString =
                     withContext(
                         Dispatchers.IO
                     ) {
@@ -211,6 +251,35 @@ class MainActivity : AppCompatActivity() {
                         )
                     }
 
+                /*
+                 * Api.pair() mengembalikan STRING JSON.
+                 *
+                 * Jadi harus diubah menjadi JSONObject
+                 * terlebih dahulu.
+                 */
+                val result =
+                    try {
+
+                        JSONObject(
+                            resultString.trim()
+                        )
+
+                    } catch (e: Exception) {
+
+                        JSONObject(
+                            """
+                            {
+                              "success": false,
+                              "message": "Response server bukan JSON valid.",
+                              "raw_response": ${jsonEscape(resultString)}
+                            }
+                            """.trimIndent()
+                        )
+                    }
+
+                /*
+                 * Ambil hasil dari JSON.
+                 */
                 val success =
                     result.optBoolean(
                         "success",
@@ -231,30 +300,66 @@ class MainActivity : AppCompatActivity() {
 
                 if (success) {
 
+                    /*
+                     * Session token hasil pairing.
+                     */
                     val session =
                         result.optString(
-                            "session_token"
+                            "session_token",
+                            ""
                         )
                             .takeIf {
                                 it.isNotBlank()
                             }
 
+                    /*
+                     * PC token hasil pairing.
+                     */
                     val pc =
                         result.optString(
-                            "pc_token"
+                            "pc_token",
+                            ""
                         )
                             .takeIf {
                                 it.isNotBlank()
                             }
 
+                    /*
+                     * Mode pairing.
+                     */
                     val mode =
                         result.optString(
-                            "mode"
+                            "mode",
+                            ""
                         )
                             .takeIf {
                                 it.isNotBlank()
                             }
                             ?: Config.MODE
+
+                    /*
+                     * Server bisa mengirim status
+                     * agent_enabled.
+                     *
+                     * DEFAULT WAJIB FALSE.
+                     */
+                    val agentEnabled =
+                        result.optBoolean(
+                            "agent_enabled",
+                            false
+                        )
+
+                    /*
+                     * Simpan hasil pairing.
+                     */
+                    storage.deviceId =
+                        deviceId
+
+                    storage.deviceToken =
+                        token
+
+                    storage.enrollmentCode =
+                        Config.ENROLLMENT_CODE
 
                     storage.sessionToken =
                         session
@@ -265,8 +370,20 @@ class MainActivity : AppCompatActivity() {
                     storage.mode =
                         mode
 
+                    /*
+                     * Status agent mengikuti server.
+                     *
+                     * Pairing baru seharusnya false.
+                     */
+                    storage.agentEnabled =
+                        agentEnabled
+
                     status.text =
-                        "Status: TERHUBUNG"
+                        if (agentEnabled) {
+                            "Status: TERHUBUNG • AGENT AKTIF"
+                        } else {
+                            "Status: TERHUBUNG • AGENT MATI"
+                        }
 
                     disconnect.visibility =
                         View.VISIBLE
@@ -274,6 +391,12 @@ class MainActivity : AppCompatActivity() {
                     connect.visibility =
                         View.GONE
 
+                    /*
+                     * Jalankan heartbeat service.
+                     *
+                     * Service akan terus bertanya ke server
+                     * mengenai agent_enabled.
+                     */
                     ContextCompat
                         .startForegroundService(
                             this@MainActivity,
@@ -286,11 +409,14 @@ class MainActivity : AppCompatActivity() {
                 } else {
 
                     /*
-                     * Sekarang error asli server
-                     * akan kelihatan.
+                     * Pairing gagal.
                      */
                     status.text =
-                        "HTTP $httpCode - $message"
+                        if (httpCode > 0) {
+                            "HTTP $httpCode - $message"
+                        } else {
+                            message
+                        }
                 }
 
             } catch (e: Exception) {
@@ -307,5 +433,34 @@ class MainActivity : AppCompatActivity() {
                     true
             }
         }
+    }
+
+    private fun jsonEscape(
+        value: String
+    ): String {
+
+        return "\"${
+            value
+                .replace(
+                    "\\",
+                    "\\\\"
+                )
+                .replace(
+                    "\"",
+                    "\\\""
+                )
+                .replace(
+                    "\r",
+                    "\\r"
+                )
+                .replace(
+                    "\n",
+                    "\\n"
+                )
+                .replace(
+                    "\t",
+                    "\\t"
+                )
+        }\""
     }
 }
